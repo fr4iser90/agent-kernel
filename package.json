@@ -1,0 +1,14 @@
+{
+  "name": "agent-kernel",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @agent-kernel/api --filter @agent-kernel/web run dev",
+    "dev:api": "pnpm --filter @agent-kernel/api dev",
+    "dev:web": "pnpm --filter @agent-kernel/web dev",
+    "build": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run build",
+    "typecheck": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run typecheck",
+    "test": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run test",
+    "gate": "bash scripts/gate.sh"
+  }
+}

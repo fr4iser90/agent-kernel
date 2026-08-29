@@ -1,6 +1,10 @@
-.DS_Store
-*.swp
-.idea/
-.vscode/
+node_modules/
+dist/
+*.db
+*.db-journal
 .env
 .env.*
+.DS_Store
+*.log
+apps/api/data/
+apps/web/dist/

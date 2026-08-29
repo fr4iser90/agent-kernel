@@ -14,13 +14,16 @@ Optional tools: [AgentLayer](https://github.com/fr4iser90/AgentLayer). Prior UI 
 
 ## Status
 
-- Spec v0: lawpack laws + scripts  
-- Product skeleton: docs + DDD tree (implementation next)  
-- Not yet: web UI, git sync, DSH policy proxy, codegraph  
+- Spec + Lawpack + ADRs (incl. single-user v1)  
+- **Scaffold running:** `pnpm dev` → API `:8787` + Web `:5173` (project register/list)  
+- Next: Lawpack Init from UI  
 
-**Read next:** [docs/VISION.md](docs/VISION.md) → [docs/NAMING.md](docs/NAMING.md) → [docs/TREE.md](docs/TREE.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+**Read next:** [docs/VISION.md](docs/VISION.md) → [docs/NAMING.md](docs/NAMING.md) → [docs/TREE.md](docs/TREE.md).
 
-## Dev posture
+## Dev
 
-Local-first control plane. Later optional deploy next to DSH (same Traefik/auth story).  
-Do not couple product code to Cursor; assume **VS Code + DSH**.
+```bash
+pnpm install
+pnpm dev          # API :8787 + Web :5173
+pnpm gate         # typecheck + test + build
+```
