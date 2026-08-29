@@ -63,10 +63,9 @@ agent-kernel/
 - **`services/policy-proxy`** — deployable next to DSH; may start as a module
   inside api until it needs isolation.
 
-## Stack pin (pending ADR)
+## Stack pin
 
-Propose (not locked): **TypeScript** API (Fastify/Hono) + **Vite React** web,
-SQLite via Drizzle — *or* Python API to align with AgentLayer/GateWay.
+**Accepted:** TypeScript API + React (Vite) + SQLite — see
+[`adr/0002-stack-pin.md`](adr/0002-stack-pin.md).
 
-Decision belongs in `docs/adr/0002-stack.md` before coding domains.
-Until then: tree + docs only; no accidental dual-stack.
+Primary UX = **web dashboard**. Not a CLI-first product.

@@ -4,37 +4,40 @@
 
 - [x] boilerstuff law pack  
 - [x] VISION / ARCHITECTURE / TREE / COMPARABLES / INTEGRATIONS  
-- [ ] ADR-0001 control plane vs boilerstuff  
-- [ ] ADR-0002 stack pin  
-- [ ] Empty DDD dirs + architecture test stubs  
+- [x] ADR-0001 control plane vs boilerstuff  
+- [x] ADR-0002 stack pin (TS API + React web)  
+- [x] Empty DDD dirs + gate scaffold  
 
-## M1 — Catalog + init (local)
+## M1 — Catalog + init **in the web dashboard** (local)
 
-- Register local git project  
-- Deterministic stack sniff  
-- Init: plant boilerstuff pin + PROGRESS/BUGS/ADAPTER + RUN_ID  
-- CLI acceptable before full UI  
+Product surface is the **UI**, not a CLI-first admin. API exists for the UI
+(and later DSH/proxy); humans manage projects in the dashboard.
 
-## M2 — Profiles + policy brief
+- Register local / git-connected project (from UI)  
+- Deterministic stack sniff (+ optional LLM assist)  
+- Init from UI: plant boilerstuff pin + PROGRESS/BUGS/ADAPTER + RUN_ID  
+- Dashboard shows project list + init status  
 
-- Profile library (lab-cycle, fix-only, docs, security)  
-- SessionBrief schema + dry-run  
-- protect/assert scripts invoked from init verification  
+## M2 — Profiles + policy brief (UI + API)
 
-## M3 — Dashboard v1
+- Profile library (lab-cycle, fix-only, docs, security) — assignable per project in UI  
+- SessionBrief schema + dry-run from dashboard  
+- protect/assert verification visible as green/red  
 
-- Configurable widgets (gate, bugs, branch, last run)  
+## M3 — Configurable dashboard
+
+- Widgets: gate, bugs, branch, last run, security, codegraph (user picks layout)  
 - Preferences persisted  
 
 ## M4 — Orchestration + DSH
 
-- Nudge scheduler  
+- Nudge scheduler (UI-configurable)  
 - Policy proxy MVP (local)  
 - Attach/start DSH session with brief  
 
 ## M5 — Knowledge (optional)
 
-- Size threshold config  
+- Size threshold config in UI  
 - Embed via GateWay / llama.cpp  
 - Search API for agents (MCP later)  
 
@@ -44,4 +47,5 @@
 - Login / ACL / audit  
 - AgentLayer security workflow hooked  
 
-Slash scope aggressively; M1–M2 before pretty UI.
+Do **not** ship “CLI-only MVP” as the product. Thin `scripts/` for gate/pack
+are fine; day-to-day UX is the web dashboard.

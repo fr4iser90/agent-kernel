@@ -80,7 +80,7 @@ Shared kernel: IDs, time, Result types — no business rules.
 Classic DDD / ports & adapters (align with PIDEA/AgentLayer habits, keep thin):
 
 ```
-presentation/     # HTTP, WS, CLI
+presentation/     # HTTP, WS (dashboard API); optional maintainer scripts later — UX is web
 application/      # use cases / handlers
 domain/           # entities, VOs, domain services, ports (interfaces)
 infrastructure/   # git, fs, sqlite/pg, DSH client, Gateway client, AgentLayer
