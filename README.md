@@ -24,6 +24,11 @@ Optional tools: [AgentLayer](https://github.com/fr4iser90/AgentLayer). Prior UI 
 
 ```bash
 pnpm install
-pnpm dev          # API :8787 + Web :5173
-pnpm gate         # typecheck + test + build
+pnpm hooks:install   # once per clone — git pre-commit → fast checks
+pnpm dev             # API :8787 + Web :5173
+pnpm precommit       # typecheck + test (what the hook runs)
+pnpm gate            # full local gate (+ build) before DONE
 ```
+
+**Gate** = quality checkpoint (see [docs/GATE.md](docs/GATE.md)).  
+No GitHub Actions yet — only local pre-commit + manual `pnpm gate`.

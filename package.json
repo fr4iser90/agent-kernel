@@ -9,6 +9,8 @@
     "build": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run build",
     "typecheck": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run typecheck",
     "test": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run test",
-    "gate": "bash scripts/gate.sh"
+    "gate": "bash scripts/gate.sh",
+    "precommit": "bash scripts/precommit.sh",
+    "hooks:install": "bash scripts/install-hooks.sh"
   }
 }
