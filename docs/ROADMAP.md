@@ -13,10 +13,11 @@
 Product surface is the **UI**, not a CLI-first admin. API exists for the UI
 (and later DSH/proxy); humans manage projects in the dashboard.
 
-- Register local / git-connected project (from UI)  
-- Deterministic stack sniff (+ optional LLM assist)  
-- Init from UI: plant lawpack pin + PROGRESS/BUGS/ADAPTER + RUN_ID  
-- Dashboard shows project list + init status  
+- [x] Scaffold TS API (Hono) + React/Vite dashboard + SQLite  
+- [x] Register local project (UI + `GET/POST /api/projects`, ownerId=local-owner)  
+- [ ] Deterministic stack sniff (+ optional LLM assist)  
+- [ ] Init from UI: plant lawpack pin + PROGRESS/BUGS/ADAPTER + RUN_ID  
+- [ ] Dashboard shows init status / lawpack version  
 
 ## M2 — Profiles + policy brief (UI + API)
 
