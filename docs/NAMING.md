@@ -98,7 +98,7 @@ Use these IDs in code + DB (English, kebab in paths, Pascal in types):
 | `orchestration` | `Run`, `NudgeSchedule` | Läufe / Nudge |
 | `observability` | `GateStatus`, `WidgetLayout` | Dashboard |
 | `knowledge` | `CodegraphConfig` | Codegraph |
-| `identity` | `User`, `Acl` | Login / Rechte |
+| `identity` | `User`, `Acl` | Login / Rechte (v1: stub `local-owner` only — ADR-0003) |
 
 Profiles **library** (lab-cycle, fix-only, docs, security) lives in
 **control plane** DB/content — they *reference* lawpack roles, they are not

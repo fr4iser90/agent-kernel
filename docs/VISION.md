@@ -44,6 +44,8 @@ policy — without becoming the coding agent itself.
    tests; new UI and bounded contexts here.
 6. **Security by default** for remote mode — Traefik + login + least privilege
    to DSH; never expose raw harness without auth.
+7. **v1 = single operator** (no login UI); schema already `ownerId`-ready —
+   multi-user auth/ACL only at remote harden (ADR-0003).
 
 ## Success (v1)
 

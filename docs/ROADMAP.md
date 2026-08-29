@@ -6,7 +6,7 @@
 - [x] VISION / ARCHITECTURE / TREE / NAMING / COMPARABLES / INTEGRATIONS  
 - [x] ADR-0001 control plane vs lawpack  
 - [x] ADR-0002 stack pin (TS API + React web)  
-- [x] Empty DDD dirs + gate scaffold  
+- [x] ADR-0003 single-user v1 / multi-user-ready schema  
 
 ## M1 — Catalog + init **in the web dashboard** (local)
 
@@ -44,8 +44,9 @@ Product surface is the **UI**, not a CLI-first admin. API exists for the UI
 ## M6 — Remote harden
 
 - Deploy beside DSH behind Traefik  
-- Login / ACL / audit  
+- **Login / ACL / audit** (multi-user; replaces implicit local-owner) — ADR-0003  
 - AgentLayer security workflow hooked  
+- Dashboard must not be public without auth  
 
 Do **not** ship “CLI-only MVP” as the product. Thin `scripts/` for gate/pack
 are fine; day-to-day UX is the web dashboard.
