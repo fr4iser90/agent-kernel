@@ -6,7 +6,7 @@ cd "$ROOT"
 echo "gate: docs + tree presence checks"
 test -f docs/VISION.md
 test -f docs/ARCHITECTURE.md
-test -d boilerstuff/roles
+test -d lawpack/roles
 test -d apps/api/domain/catalog
 test -d services/policy-proxy
 echo "gate: OK (docs/scaffold only — expand after ADR-0002)"

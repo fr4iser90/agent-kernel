@@ -11,7 +11,7 @@
 | API | **TypeScript** (Hono or Fastify) |
 | Web UI | **React** + Vite |
 | DB (local-first) | SQLite (e.g. Drizzle) |
-| Pack scripts | Bash (already in `boilerstuff/scripts`, `scripts/`) |
+| Pack scripts | Bash (already in `lawpack/scripts`, `scripts/`) |
 
 ## Why TypeScript
 

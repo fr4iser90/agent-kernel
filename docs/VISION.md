@@ -13,14 +13,14 @@ policy — without becoming the coding agent itself.
 |----|--------|
 | Control plane + dashboard | Replacement for DSH (executor stays DSH) |
 | Policy + profiles + nudge scheduler | Another chat IDE (PIDEA lesson: don’t boil the ocean in UI) |
-| Publisher of `boilerstuff/` into products | Vite/game scaffold |
+| Publisher of `lawpack/` into products | Vite/game scaffold |
 | Integrator of Gateway / AgentLayer / scanners | Hard dependency on one LLM vendor |
 
 ## Core user flows
 
 1. **Register project** — path or git remote; detect stack (deterministic first;
    LLM assist optional).
-2. **Initialize** — pin a `boilerstuff` version into the repo (copy or submodule)
+2. **Initialize** — pin a `lawpack` version into the repo (copy or submodule)
    + write `PROGRESS`/`BUGS`/`ADAPTER` stubs + RUN_ID.
 3. **Assign profiles** — e.g. `cycle/lab-followup`, `role/fix-only`,
    `role/docs`, `role/legal-impressum`, `workflow/security-scan`.
@@ -33,7 +33,7 @@ policy — without becoming the coding agent itself.
 
 ## Design principles
 
-1. **Laws live in the product repo** (boilerstuff pin) so any harness can read
+1. **Laws live in the product repo** (lawpack pin) so any harness can read
    files offline. Control plane stores **metadata + pins + schedules**.
 2. **Deterministic init by default**; LLM only fills gaps (stack guess, ACCEPT
    hints) and must be reviewable.
@@ -48,7 +48,7 @@ policy — without becoming the coding agent itself.
 ## Success (v1)
 
 - 3+ of your git projects registered locally  
-- One init path plants boilerstuff + RUN_ID without manual copy  
+- One init path plants lawpack + RUN_ID without manual copy  
 - One profile runs a Followup-shaped loop via DSH  
 - Dashboard shows gate + BUGS Open + branch  
 - Protect + architecture violation tests exist in *this* repo’s gate  

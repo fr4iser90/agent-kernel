@@ -1,39 +1,41 @@
 # Repository tree (target)
 
-Status: **scaffold** — dirs exist with README stubs; implementation TBD.
+Status: scaffold + naming locked — see [`NAMING.md`](NAMING.md).
 
 ```
-agent-kernel/
-├── README.md                 # product entry
+agent-kernel/                    # PRODUCT: project management control plane
+├── README.md
 ├── LICENSE
 ├── docs/
 │   ├── VISION.md
 │   ├── ARCHITECTURE.md
-│   ├── TREE.md               # this file
+│   ├── TREE.md                  # this file
+│   ├── NAMING.md                # names, plant paths, keep/sort
 │   ├── COMPARABLES.md
 │   ├── INTEGRATIONS.md
 │   ├── ROADMAP.md
-│   └── adr/                  # ADRs for this product
-│       └── 0001-control-plane-vs-boilerstuff.md
-├── boilerstuff/              # PLANTABLE law pack (versioned)
+│   └── adr/
+│       ├── 0001-control-plane-vs-lawpack.md
+│       └── 0002-stack-pin.md
+├── lawpack/                     # PLANTABLE pack (official name: Lawpack)
 │   ├── README.md
 │   ├── LAWS.md
 │   ├── OWNED_PATHS.md
 │   ├── RUNTIME.md
 │   ├── MIGRATION.md
 │   ├── LESSONS.md
-│   ├── roles/
-│   ├── adapters/
+│   ├── roles/                   # machine roles
+│   ├── adapters/                # stack stubs
 │   ├── examples/prompts/
-│   └── scripts/              # assert-run-id, protect-owned-paths
+│   └── scripts/                 # assert-run-id, protect-owned-paths
 ├── apps/
-│   ├── api/                  # control plane backend (DDD)
+│   ├── api/                     # TS control plane (DDD)
 │   │   ├── presentation/
 │   │   ├── application/
 │   │   ├── domain/
 │   │   │   ├── catalog/
-│   │   │   ├── provisioning/
-│   │   │   ├── profiles/
+│   │   │   ├── provisioning/  # Init + LawpackPin
+│   │   │   ├── profiles/        # AgentProfile / Workflow (DB/content)
 │   │   │   ├── policy/
 │   │   │   ├── orchestration/
 │   │   │   ├── observability/
@@ -41,31 +43,34 @@ agent-kernel/
 │   │   │   └── identity/
 │   │   ├── infrastructure/
 │   │   └── tests/
-│   └── web/                  # dashboard SPA
+│   └── web/                     # React + Vite dashboard
 │       ├── src/
 │       └── tests/
-├── packages/                 # optional shared TS/Python libs later
-│   └── session-brief/        # SessionBrief schema (shared with proxy)
+├── packages/
+│   └── session-brief/           # shared SessionBrief schema
 ├── services/
-│   └── policy-proxy/         # optional sidecar between clients and DSH
+│   └── policy-proxy/            # in front of DSH
 ├── scripts/
-│   ├── gate.sh               # repo gate for THIS product
-│   └── pack-boilerstuff.sh   # emit versioned tarball/npm for init
+│   ├── gate.sh
+│   └── pack-lawpack.sh
 └── tests/
-    └── architecture/         # LOC, layer violation, owned-path meta-tests
+    └── architecture/
 ```
 
-## Naming
+## Planted into a product (after Init)
 
-- **`boilerstuff/`** — laws planted into *other* repos (not the control plane’s
-  own runtime config).  
-- **`apps/api`** — the manager.  
-- **`services/policy-proxy`** — deployable next to DSH; may start as a module
-  inside api until it needs isolation.
+```
+my-product/
+├── vendor/lawpack/              # pinned Lawpack
+│   └── LAWPACK_VERSION
+├── AGENTS.md                    # thin pointer + RUN_ID
+├── ADAPTER.md
+├── PROGRESS.md
+├── BUGS.md
+└── … source …
+```
 
-## Stack pin
+## Stack
 
-**Accepted:** TypeScript API + React (Vite) + SQLite — see
-[`adr/0002-stack-pin.md`](adr/0002-stack-pin.md).
-
-Primary UX = **web dashboard**. Not a CLI-first product.
+TypeScript API + React (Vite) + SQLite — [`adr/0002-stack-pin.md`](adr/0002-stack-pin.md).  
+UX = web dashboard.

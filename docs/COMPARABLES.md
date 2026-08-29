@@ -1,6 +1,6 @@
 # Comparables — similar systems
 
-None of these are a drop-in for **your** stack (boilerstuff laws + DSH +
+None of these are a drop-in for **your** stack (lawpack laws + DSH +
 LocalAI-GateWay + AgentLayer). Use them as inspiration.
 
 | Project | Strength | Gap vs agent-kernel |
@@ -15,5 +15,5 @@ LocalAI-GateWay + AgentLayer). Use them as inspiration.
 
 ## Takeaway
 
-Build **control plane + boilerstuff + policy proxy**. Reuse patterns
+Build **control plane + lawpack + policy proxy**. Reuse patterns
 (worktrees, Kanban, MCP tools) without adopting a foreign product as core.

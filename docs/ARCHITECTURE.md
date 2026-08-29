@@ -5,7 +5,7 @@
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  Dashboard  │────►│  agent-kernel    │────►│ Product repos   │
-│  (Web UI)   │     │  control plane   │     │ + boilerstuff   │
+│  (Web UI)   │     │  control plane   │     │ + lawpack   │
 └─────────────┘     └────────┬─────────┘     └────────┬────────┘
                              │                        │
                     policy / nudge / status            │ reads LAWS
@@ -29,18 +29,18 @@
                     └──────────────────┘
 ```
 
-### Boilerstuff: copy or fetch?
+### Lawpack: copy or fetch?
 
 **Both, with a pin:**
 
 | Mode | When | How |
 |------|------|-----|
-| **Vendor copy** | Default init | Control plane writes `vendor/agent-kernel@<sha>` or `boilerstuff/` files into product from a released pack |
-| **Submodule / subtree** | You want upstream pulls | `git submodule` → this repo’s `boilerstuff/` |
+| **Vendor copy** | Default init | Control plane writes `vendor/agent-kernel@<sha>` or `lawpack/` files into product from a released pack |
+| **Submodule / subtree** | You want upstream pulls | `git submodule` → this repo’s `lawpack/` |
 | **Live fetch** | Rare; air-gapped avoid | Agent/control plane HTTP-fetches pack at session start — **not** sole source of truth |
 
 **Rule:** Product repo must contain a **pinned** law pack so DSH works offline and
-CI protect scripts work. Control plane DB stores `boilerstuff_version` + hash.
+CI protect scripts work. Control plane DB stores `lawpack_version` + hash.
 
 DSH does **not** “own” the laws; it **reads** them from the product workdir
 (and receives a session brief from the policy proxy).
@@ -65,7 +65,7 @@ Do **not** fork DeepSeek Harness into this monorepo. Integrate.
 | Context | Responsibility |
 |---------|----------------|
 | **Catalog** | Projects, git remotes, local paths, stack detection |
-| **Provisioning** | Init, boilerstuff pin, RUN_ID, ADAPTER stub |
+| **Provisioning** | Init, lawpack pin, RUN_ID, ADAPTER stub |
 | **Profiles** | Agent/role/workflow definitions (cycle, fix-only, docs, legal, security) |
 | **Policy** | Branch rules, owned paths, tool allow/deny, SessionBrief |
 | **Orchestration** | Nudge schedules, run history, link to DSH session ids |
@@ -122,5 +122,5 @@ Tests fail on layer violations (import linter / arch unit tests).
 ## Comparables (learn, don’t clone)
 
 See [`COMPARABLES.md`](COMPARABLES.md). Closest ideas: Agent Orchestrator,
-Entourage, AWF, SwarmGit, Daintree — none replace *your* boilerstuff laws +
+Entourage, AWF, SwarmGit, Daintree — none replace *your* lawpack laws +
 GateWay + DSH home lab.

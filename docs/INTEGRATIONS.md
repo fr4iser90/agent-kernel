@@ -34,7 +34,7 @@
 
 - Proof of FIX→VALIDATE→FEATURE + Pages.
 - Do **not** merge lab `src/` into products.
-- Port failure modes into `boilerstuff/LESSONS.md` and profiles.
+- Port failure modes into `lawpack/LESSONS.md` and profiles.
 
 ## PIDEA
 
@@ -47,5 +47,5 @@
 ## Git hosts
 
 - Local path + `git` CLI first.
-- Remotes: GitHub/`gh` optional; policy for branches stays in boilerstuff +
+- Remotes: GitHub/`gh` optional; policy for branches stays in lawpack +
   control plane Profiles (mirrors LAWS).

@@ -4,7 +4,7 @@
 
 | Piece | Path | Job |
 |-------|------|-----|
-| **Boilerstuff** (law pack) | [`boilerstuff/`](boilerstuff/) | LAWS, roles, protect scripts, adapters — planted into product repos |
+| **Lawpack** (law pack) | [`lawpack/`](lawpack/) | LAWS, roles, protect scripts, adapters — planted into product repos |
 | **Control plane** (this product) | `apps/` + `docs/` | See projects, git, init, agent profiles, dashboards, policy, nudge |
 
 Showcase loop that proved the laws: [autonomous-lab](https://github.com/fr4iser90/autonomous-lab).  
@@ -14,11 +14,11 @@ Optional tools: [AgentLayer](https://github.com/fr4iser90/AgentLayer). Prior UI 
 
 ## Status
 
-- Spec v0: boilerstuff laws + scripts  
+- Spec v0: lawpack laws + scripts  
 - Product skeleton: docs + DDD tree (implementation next)  
 - Not yet: web UI, git sync, DSH policy proxy, codegraph  
 
-**Read next:** [docs/VISION.md](docs/VISION.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → [docs/TREE.md](docs/TREE.md).
+**Read next:** [docs/VISION.md](docs/VISION.md) → [docs/NAMING.md](docs/NAMING.md) → [docs/TREE.md](docs/TREE.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Dev posture
 

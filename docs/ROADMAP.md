@@ -2,9 +2,9 @@
 
 ## M0 — Docs + tree (current)
 
-- [x] boilerstuff law pack  
-- [x] VISION / ARCHITECTURE / TREE / COMPARABLES / INTEGRATIONS  
-- [x] ADR-0001 control plane vs boilerstuff  
+- [x] lawpack (Lawpack) law pack  
+- [x] VISION / ARCHITECTURE / TREE / NAMING / COMPARABLES / INTEGRATIONS  
+- [x] ADR-0001 control plane vs lawpack  
 - [x] ADR-0002 stack pin (TS API + React web)  
 - [x] Empty DDD dirs + gate scaffold  
 
@@ -15,7 +15,7 @@ Product surface is the **UI**, not a CLI-first admin. API exists for the UI
 
 - Register local / git-connected project (from UI)  
 - Deterministic stack sniff (+ optional LLM assist)  
-- Init from UI: plant boilerstuff pin + PROGRESS/BUGS/ADAPTER + RUN_ID  
+- Init from UI: plant lawpack pin + PROGRESS/BUGS/ADAPTER + RUN_ID  
 - Dashboard shows project list + init status  
 
 ## M2 — Profiles + policy brief (UI + API)
