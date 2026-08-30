@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-kernel.local/schemas/session-brief.schema.json",
+  "title": "SessionBrief",
+  "type": "object",
+  "required": ["projectId", "assignmentId", "executorId", "workdir", "runId"],
+  "additionalProperties": false,
+  "properties": {
+    "projectId": { "type": "string" },
+    "assignmentId": { "type": "string" },
+    "executorId": { "type": "string", "default": "dsh" },
+    "workdir": { "type": "string", "description": "Absolute product workdir" },
+    "runId": { "type": "string" },
+    "lawpackPin": { "type": "string" },
+    "injectionMode": { "type": "string", "enum": ["harness_inject", "repo_plant"] },
+    "rolesPath": { "type": ["string", "null"] },
+    "agentsMdPath": { "type": ["string", "null"] },
+    "gateCommand": { "type": ["string", "null"] },
+    "ownedPathsRef": { "type": ["string", "null"] },
+    "profileId": { "type": "string" },
+    "reviewMode": { "type": "string", "enum": ["human", "llm_propose", "llm_auto"] },
+    "initialObjective": { "type": ["string", "null"] },
+    "injectMaterialization": {
+      "type": "string",
+      "enum": ["ephemeral_dir", "dot_agent", "prompt_inline", "none"],
+      "description": "harness_inject only; see inject-runtime.md"
+    }
+  }
+}

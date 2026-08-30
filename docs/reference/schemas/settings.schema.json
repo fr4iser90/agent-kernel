@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-kernel.local/schemas/settings.schema.json",
+  "title": "AgentKernelSettings",
+  "type": "object",
+  "required": ["schemaVersion", "executorId", "injectionMode"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "workspaceRoot": { "type": ["string", "null"] },
+    "executorId": { "type": "string", "default": "dsh" },
+    "dshInvokeMode": { "type": "string", "enum": ["cli", "host_http"], "default": "cli" },
+    "dshEndpoint": { "type": ["string", "null"], "format": "uri" },
+    "gatewayUrl": { "type": ["string", "null"], "format": "uri" },
+    "gatewayApiKeyRef": { "type": ["string", "null"] },
+    "injectionMode": {
+      "type": "string",
+      "enum": ["harness_inject", "repo_plant"],
+      "default": "harness_inject"
+    },
+    "injectStrength": { "type": "string", "enum": ["strict", "hybrid"], "default": "hybrid" },
+    "layoutPreset": {
+      "type": "string",
+      "enum": ["vendor", "dot-agent", "custom"],
+      "default": "dot-agent"
+    },
+    "layoutPaths": { "type": "object", "additionalProperties": { "type": "string" } },
+    "lawpackPinPolicy": { "type": "string", "default": "latest" },
+    "createTrackingFiles": { "type": "boolean", "default": true },
+    "createAgentsMd": { "type": "boolean", "default": true },
+    "gitPolicyEnabled": { "type": "boolean", "default": false },
+    "baselineBranch": { "type": "string", "default": "main" },
+    "runIdPattern": { "type": "string", "default": "agent/<slug>-YYYYMMDD" },
+    "forbidRunIdForkSuffixes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["-v2", "-p", "-rebased"]
+    },
+    "protectAssertRunId": { "type": "boolean", "default": false },
+    "protectOwnedPaths": { "type": "boolean", "default": false },
+    "installProtectHooks": { "type": "boolean", "default": false },
+    "ownedPathsFile": { "type": ["string", "null"] },
+    "defaultPresetId": {
+      "type": "string",
+      "enum": ["clean", "tracking", "offline"],
+      "default": "tracking"
+    },
+    "defaultProfileId": { "type": "string", "default": "tracking-cycle" },
+    "defaultScheduleMode": {
+      "type": "string",
+      "enum": ["infinite", "cron", "once", "on_event", "manual"],
+      "default": "infinite"
+    },
+    "defaultReviewMode": {
+      "type": "string",
+      "enum": ["human", "llm_propose", "llm_auto"],
+      "default": "human"
+    },
+    "defaultCronExpr": { "type": ["string", "null"], "default": "0 3 * * *" },
+    "widgetLayout": {},
+    "attentionRules": {}
+  }
+}

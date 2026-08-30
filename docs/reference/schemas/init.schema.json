@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-kernel.local/schemas/init.schema.json",
+  "title": "InitRequest",
+  "type": "object",
+  "required": ["projectId"],
+  "additionalProperties": false,
+  "properties": {
+    "projectId": { "type": "string", "minLength": 1 },
+    "presetId": {
+      "type": "string",
+      "enum": ["clean", "tracking", "offline"],
+      "description": "UI shortcut; maps to Settings-shaped fields. Not a Lawpack id."
+    },
+    "injectionMode": { "type": "string", "enum": ["harness_inject", "repo_plant"] },
+    "injectStrength": { "type": "string", "enum": ["strict", "hybrid"] },
+    "layoutPreset": { "type": "string", "enum": ["vendor", "dot-agent", "custom"] },
+    "layoutPaths": { "type": "object", "additionalProperties": { "type": "string" } },
+    "lawpackPin": { "type": "string" },
+    "runId": { "type": "string" },
+    "createTrackingFiles": { "type": "boolean" },
+    "createAgentsMd": { "type": "boolean" },
+    "installProtectHooks": { "type": "boolean", "default": false },
+    "gateCommand": { "type": "string" },
+    "stackPin": { "type": "string" },
+    "profileId": { "type": "string", "description": "First assignment profile, e.g. tracking-cycle" },
+    "scheduleMode": {
+      "type": "string",
+      "enum": ["infinite", "cron", "once", "on_event", "manual"]
+    },
+    "reviewMode": { "type": "string", "enum": ["human", "llm_propose", "llm_auto"] },
+    "executorId": { "type": "string" },
+    "initialObjective": { "type": "string" },
+    "dryRun": { "type": "boolean", "default": false }
+  }
+}

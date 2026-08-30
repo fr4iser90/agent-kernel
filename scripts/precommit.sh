@@ -6,7 +6,12 @@ cd "$ROOT"
 
 echo "precommit: lawpack + docs presence"
 test -d lawpack/roles
-test -f docs/NAMING.md
+test -f lawpack/MANIFEST.json
+test -f docs/index.md
+test -f docs/reference/naming.md
+
+echo "precommit: doc links"
+bash scripts/check-doc-links.sh
 
 if [[ ! -d node_modules ]]; then
   echo "precommit: pnpm install"

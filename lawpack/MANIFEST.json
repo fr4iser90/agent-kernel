@@ -1,0 +1,41 @@
+{
+  "id": "agent-kernel-default",
+  "version": "0.1.1",
+  "features": [
+    "laws",
+    "roles",
+    "tracking_conventions",
+    "owned_paths",
+    "protect_scripts",
+    "optional_profiles"
+  ],
+  "entrypoint": {
+    "laws": "LAWS.md",
+    "ownedPaths": "OWNED_PATHS.md",
+    "rolesDir": "roles"
+  },
+  "roles": {
+    "core": [
+      "roles/followup.md",
+      "roles/fix.md",
+      "roles/feature.md",
+      "roles/validate.md",
+      "roles/demo.md",
+      "roles/arch.md"
+    ],
+    "crossCutting": [
+      "roles/docs.md",
+      "roles/legal-impressum.md",
+      "roles/security.md"
+    ]
+  },
+  "optionalProfiles": {
+    "games": "profiles/games.md",
+    "web-compliance": "profiles/web-compliance.md"
+  },
+  "optionalScripts": {
+    "assertRunId": "scripts/assert-run-id.sh",
+    "protectOwnedPaths": "scripts/protect-owned-paths.sh"
+  },
+  "notes": "LAWS.md is generic. games = game ACCEPT overlay. web-compliance = docs/legal/security roles. Runbook scans are external."
+}

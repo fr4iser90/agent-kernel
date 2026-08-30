@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-kernel.local/schemas/project-facts.schema.json",
+  "title": "ProjectFacts",
+  "type": "object",
+  "required": ["projectId", "factsAt"],
+  "additionalProperties": false,
+  "properties": {
+    "projectId": { "type": "string" },
+    "factsAt": { "type": "string", "format": "date-time" },
+    "sniff": {
+      "type": "object",
+      "description": "Fast subset from FsProjectSniffer",
+      "properties": {
+        "repoKind": { "type": "string" },
+        "monorepoTool": { "type": ["string", "null"] },
+        "packageManager": { "type": ["string", "null"] },
+        "stackPin": { "type": ["string", "null"] },
+        "gateCommand": { "type": ["string", "null"] },
+        "hasCi": { "type": "boolean" },
+        "workspaces": { "type": "array", "items": { "type": "string" } },
+        "suggestedProfileId": { "type": ["string", "null"] },
+        "sniffedAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "properties": {
+        "lastCommitAt": { "type": ["string", "null"], "format": "date-time" },
+        "daysSinceTouch": { "type": ["integer", "null"] }
+      }
+    },
+    "age": {
+      "type": "object",
+      "properties": {
+        "firstCommitAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "churn": {
+      "type": "object",
+      "properties": {
+        "commits90d": { "type": ["integer", "null"] },
+        "filesChanged90d": { "type": ["integer", "null"] }
+      }
+    },
+    "size": {
+      "type": "object",
+      "properties": {
+        "approxLoc": { "type": ["integer", "null"] },
+        "fileCount": { "type": ["integer", "null"] }
+      }
+    },
+    "hygiene": {
+      "type": "object",
+      "properties": {
+        "hasReadme": { "type": "boolean" },
+        "hasLicense": { "type": "boolean" },
+        "hasLockfile": { "type": "boolean" },
+        "hasTests": { "type": "boolean" }
+      }
+    },
+    "autonomy": {
+      "type": "object",
+      "properties": {
+        "hasProgress": { "type": "boolean" },
+        "hasBugs": { "type": "boolean" },
+        "hasAdapter": { "type": "boolean" },
+        "lawpackPinned": { "type": "boolean" },
+        "hasGate": { "type": "boolean" }
+      }
+    },
+    "userTags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["deprecated", "active", "playground", "prod"]
+      }
+    }
+  }
+}

@@ -10,7 +10,7 @@
 |-------|--------|
 | API | **TypeScript** (Hono or Fastify) |
 | Web UI | **React** + Vite |
-| DB (local-first) | SQLite (e.g. Drizzle) |
+| DB (local-first) | **SQLite** (e.g. Drizzle) — server: **Postgres** per [ADR-0005](0005-persistence-sqlite-postgres.md) |
 | Pack scripts | Bash (already in `lawpack/scripts`, `scripts/`) |
 
 ## Why TypeScript

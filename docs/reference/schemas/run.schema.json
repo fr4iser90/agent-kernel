@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-kernel.local/schemas/run.schema.json",
+  "title": "Run",
+  "type": "object",
+  "required": ["id", "assignmentId", "projectId", "executorId", "startedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "assignmentId": { "type": "string" },
+    "projectId": { "type": "string" },
+    "executorId": { "type": "string" },
+    "executorSessionId": { "type": ["string", "null"] },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": ["string", "null"], "format": "date-time" },
+    "outcome": {
+      "type": ["string", "null"],
+      "enum": ["running", "succeeded", "failed", "denied", "cancelled", null]
+    },
+    "briefHash": { "type": ["string", "null"] },
+    "denyReason": { "type": ["string", "null"] }
+  }
+}

@@ -1,0 +1,69 @@
+# Remote S override — existing Traefik + optional Postgres (ADR-0005).
+# We do not ship Traefik. Usage:
+#   docker compose -f deploy/compose.yml -f deploy/compose.server.yml up -d
+#
+# Postgres: set DATABASE_URL (and usually disable SQLite volume as SoT).
+# Example URL: postgres://agent:agent@postgres:5432/agent_kernel
+
+services:
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent}
+      POSTGRES_DB: ${POSTGRES_DB:-agent_kernel}
+    volumes:
+      - ak-pgdata:/var/lib/postgresql/data
+    networks: [default]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent} -d ${POSTGRES_DB:-agent_kernel}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    ports: []  # no host publish; Traefik only
+    environment:
+      # When set, API MUST use Postgres (ADR-0005). Omit to keep SQLite on ak-data.
+      DATABASE_URL: ${DATABASE_URL:-}
+      DB_PATH: /data/agent-kernel.db
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.ak-api.rule=Host(`${API_HOST:-api.agent-kernel.local}`)
+      - traefik.http.routers.ak-api.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.ak-api.tls=true
+      - traefik.http.services.ak-api.loadbalancer.server.port=8787
+      - traefik.docker.network=${TRAEFIK_NETWORK:-proxy}
+    networks:
+      - default
+      - proxy
+    volumes:
+      - ak-data:/data
+      - ${WORKSPACE_ROOT}:/workspaces:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+
+  web:
+    ports: []
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.ak-web.rule=Host(`${WEB_HOST:-agent-kernel.local}`)
+      - traefik.http.routers.ak-web.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.ak-web.tls=true
+      - traefik.http.services.ak-web.loadbalancer.server.port=80
+      - traefik.docker.network=${TRAEFIK_NETWORK:-proxy}
+      - traefik.http.routers.ak-web.middlewares=${AUTH_MIDDLEWARE:-}
+    networks:
+      - default
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-proxy}
+
+volumes:
+  ak-pgdata:

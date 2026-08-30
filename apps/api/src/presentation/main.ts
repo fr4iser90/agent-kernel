@@ -5,7 +5,7 @@ import { openSqlite, SqliteProjectRepository } from '../infrastructure/sqlite/pr
 import { createApp } from './app.js'
 
 const port = Number(process.env.PORT ?? 8787)
-const dbPath = process.env.AK_DB_PATH ?? join(process.cwd(), 'data', 'agent-kernel.db')
+const dbPath = process.env.DB_PATH ?? join(process.cwd(), 'data', 'agent-kernel.db')
 
 const db = openSqlite(dbPath)
 const projects = new SqliteProjectRepository(db)

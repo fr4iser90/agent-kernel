@@ -1,0 +1,45 @@
+# Local L-docker — agent-kernel control plane
+name: agent-kernel
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    env_file: .env
+    environment:
+      PORT: "8787"
+      DB_PATH: /data/agent-kernel.db
+      WORKSPACE_ROOT: ${WORKSPACE_ROOT:-/workspaces}
+    volumes:
+      - ak-data:/data
+      - ${WORKSPACE_ROOT:-./workspaces}:/workspaces:rw
+    ports:
+      - "${API_PORT:-8787}:8787"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://127.0.0.1:8787}
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  policy-proxy:
+    profiles: ["proxy"]
+    image: ${POLICY_PROXY_IMAGE:-nginx:alpine}
+    # Replace with services/policy-proxy image when implemented.
+    networks: [default]
+    depends_on: [api]
+
+volumes:
+  ak-data:

@@ -20,8 +20,13 @@ Split this repository into:
 3. **DeepSeek Harness** remains an external executor; we integrate via policy
    proxy / session brief, we do not fork DSH here.
 
-Init **vendors a pin** into each product (copy or submodule). Live-only fetch
-of laws is not the source of truth.
+Init **records a lawpack pin**. Materialization is either **repo plant** or
+**harness inject** (or both) — see ADR-0004 / `operating-model.md`. Live-only
+fetch without a pin is not the source of truth.
+
+Git branch police and protect scripts are **optional pack features**, gated by
+operator Settings — see `settings.md` / `lawpack.md`. They are not implied by
+“project initialized”.
 
 ## Consequences
 
@@ -33,4 +38,4 @@ of laws is not the source of truth.
 ## Rename note
 
 Folder formerly called `boilerstuff/`; official name is **Lawpack** (`lawpack/`).
-See `docs/NAMING.md`.
+See `docs/reference/naming.md`.

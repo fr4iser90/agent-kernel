@@ -1,0 +1,309 @@
+openapi: 3.1.0
+info:
+  title: agent-kernel control plane API
+  version: 0.2.0
+  description: |
+    Normative HTTP surface. Aligns with docs/reference/settings.md,
+    docs/how-to/init.md, docs/reference/data-model.md,
+    docs/reference/operator-tools.md.
+servers:
+  - url: http://127.0.0.1:8787
+    description: L-native default
+paths:
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        '200':
+          description: OK
+  /api/settings:
+    get:
+      summary: Return settings document
+      responses:
+        '200':
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: './settings.schema.json'
+    put:
+      summary: Replace or merge settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: './settings.schema.json'
+      responses:
+        '200':
+          description: Updated settings
+  /api/settings/init-defaults:
+    get:
+      summary: Subset used by Init
+      responses:
+        '200':
+          description: Init defaults subset
+    put:
+      summary: Update Init defaults subset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated subset
+  /api/projects:
+    get:
+      summary: List projects
+      responses:
+        '200':
+          description: Project list
+    post:
+      summary: Register project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                path: { type: string }
+                gitRemote: { type: string }
+      responses:
+        '201':
+          description: Created
+  /api/projects/{projectId}:
+    get:
+      summary: Get project
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: Project
+  /api/projects/{projectId}/sniff:
+    post:
+      summary: Deterministic sniff
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: Sniff meta
+  /api/projects/{projectId}/analyze:
+    post:
+      summary: Refresh ProjectFacts
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: Facts
+          content:
+            application/json:
+              schema:
+                $ref: './project-facts.schema.json'
+  /api/projects/{projectId}/init/preview:
+    post:
+      summary: Dry-run InitPlan
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: './init.schema.json'
+      responses:
+        '200':
+          description: InitPlan preview
+  /api/projects/{projectId}/init:
+    post:
+      summary: Apply Init
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: './init.schema.json'
+      responses:
+        '200':
+          description: Applied
+        '409':
+          description: Conflict
+  /api/projects/{projectId}/assignments:
+    get:
+      summary: List assignments for project
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: Assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: './assignment.schema.json'
+    post:
+      summary: Create assignment
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: './assignment.schema.json'
+      responses:
+        '201':
+          description: Created
+  /api/assignments/{assignmentId}:
+    patch:
+      summary: Update assignment (pause, schedule, …)
+      parameters:
+        - $ref: '#/components/parameters/assignmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: './assignment.schema.json'
+      responses:
+        '200':
+          description: Updated
+  /api/assignments/{assignmentId}/brief:
+    post:
+      summary: SessionBrief dry-run
+      parameters:
+        - $ref: '#/components/parameters/assignmentId'
+      responses:
+        '200':
+          description: Brief
+          content:
+            application/json:
+              schema:
+                $ref: './session-brief.schema.json'
+  /api/assignments/{assignmentId}/nudge:
+    post:
+      summary: Start/nudge run (fan-out if global)
+      parameters:
+        - $ref: '#/components/parameters/assignmentId'
+      responses:
+        '201':
+          description: Run created (or batch of runs for global)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: './run.schema.json'
+                  - type: array
+                    items:
+                      $ref: './run.schema.json'
+        '403':
+          description: Denied by policy
+  /api/assignments/{assignmentId}/targets:
+    get:
+      summary: Preview fan-out target project ids
+      parameters:
+        - $ref: '#/components/parameters/assignmentId'
+      responses:
+        '200':
+          description: Resolved targets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projectIds:
+                    type: array
+                    items: { type: string }
+  /api/profiles:
+    get:
+      summary: List agent profiles
+      responses:
+        '200':
+          description: Profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: './profile.schema.json'
+    post:
+      summary: Create profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: './profile.schema.json'
+      responses:
+        '201':
+          description: Created
+  /api/runs:
+    get:
+      summary: List runs
+      parameters:
+        - name: projectId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: './run.schema.json'
+  /api/runs/{runId}:
+    get:
+      summary: Get run
+      parameters:
+        - $ref: '#/components/parameters/runId'
+      responses:
+        '200':
+          description: Run
+          content:
+            application/json:
+              schema:
+                $ref: './run.schema.json'
+  /api/observability/attention:
+    get:
+      summary: Overview attention strip payload
+      responses:
+        '200':
+          description: Attention items
+  /api/audit:
+    get:
+      summary: Audit events (M6+)
+      responses:
+        '200':
+          description: Events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: './audit-event.schema.json'
+components:
+  parameters:
+    projectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: string }
+    assignmentId:
+      name: assignmentId
+      in: path
+      required: true
+      schema: { type: string }
+    runId:
+      name: runId
+      in: path
+      required: true
+      schema: { type: string }

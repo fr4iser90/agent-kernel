@@ -1,26 +1,34 @@
 # Lawpack — plantable autonomy laws
 
-Official name: **Lawpack** (formerly “boilerstuff”).  
-Planted into product repos by the control plane Init (or manually).
+Official name: **Lawpack**.
 
-Parent docs: [`../docs/NAMING.md`](../docs/NAMING.md), [`../docs/VISION.md`](../docs/VISION.md).
+**Contract:** [`../docs/reference/lawpack.md`](../docs/reference/lawpack.md)  
+**Manifest:** [`MANIFEST.json`](MANIFEST.json)  
+**Delivery:** [`../docs/adr/0004-dual-injection-multi-executor.md`](../docs/adr/0004-dual-injection-multi-executor.md)  
+**Git/protect:** Settings-gated — [`../docs/reference/settings.md`](../docs/reference/settings.md)
+
+Planted by Init **and/or** injected at run time (`harness_inject`). Default
+preference: harness inject.
 
 ## Contents
 
-| Path | Purpose |
-|------|---------|
-| `LAWS.md` | Constitution |
-| `OWNED_PATHS.md` | Deny-list template |
-| `RUNTIME.md` | DSH / VS Code expectations |
-| `MIGRATION.md` | Manual attach without UI |
-| `LESSONS.md` | Failure modes from autonomous-lab |
-| `roles/` | followup, fix, feature, validate, demo, arch |
-| `adapters/` | Stack stubs |
-| `examples/prompts/` | Initial / Followup / fix templates |
-| `scripts/` | `assert-run-id`, `protect-owned-paths` |
+| Path | Purpose | Generic? |
+|------|---------|----------|
+| `MANIFEST.json` | Pack id, version, features, entrypoints | **Required** |
+| `LAWS.md` | **Generic** constitution | **Yes** |
+| `profiles/games.md` | Optional game ACCEPT overlay | Optional |
+| `profiles/web-compliance.md` | Docs / legal / security profile hints | Optional |
+| `roles/` | Core loop + docs / legal-impressum / security | **Core + cross-cutting** |
+| `OWNED_PATHS.md` | Deny-list template | Optional feature |
+| `RUNTIME.md` | DSH / VS Code expectations | Notes |
+| `MIGRATION.md` | Manual attach without UI | Ops |
+| `LESSONS.md` | Failure modes from autonomous-lab | Ops (not laws) |
+| `adapters/` | Stack stubs | Optional |
+| `examples/prompts/` | Initial / Followup / fix templates | Optional |
+| `scripts/` | assert-run-id, protect-owned-paths | Optional — Settings-gated |
 
 ## Pack release
 
 From repo root: `./scripts/pack-lawpack.sh [version]` → `dist/lawpack-*.tar.gz`.
 
-Default plant path in products: `vendor/lawpack/` + `LAWPACK_VERSION`.
+Layout presets come from Settings / Init (`vendor/lawpack/` or `.agent/lawpack/`).

@@ -2,13 +2,20 @@
   "name": "agent-kernel",
   "private": true,
   "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "pnpm -r --parallel --filter @agent-kernel/api --filter @agent-kernel/web run dev",
     "dev:api": "pnpm --filter @agent-kernel/api dev",
     "dev:web": "pnpm --filter @agent-kernel/web dev",
+    "dev:docs": "pnpm --filter @agent-kernel/docs dev",
     "build": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run build",
+    "build:docs": "pnpm --filter @agent-kernel/docs build",
     "typecheck": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run typecheck",
     "test": "pnpm -r --filter @agent-kernel/api --filter @agent-kernel/web run test",
+    "docs:links": "bash scripts/check-doc-links.sh",
+    "health": "bash scripts/health.sh",
     "gate": "bash scripts/gate.sh",
     "precommit": "bash scripts/precommit.sh",
     "hooks:install": "bash scripts/install-hooks.sh"

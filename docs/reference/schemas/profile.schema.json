@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-kernel.local/schemas/profile.schema.json",
+  "title": "AgentProfile",
+  "type": "object",
+  "required": ["id", "rolePath"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "description": "e.g. tracking-cycle, fix-only" },
+    "label": { "type": "string" },
+    "rolePath": {
+      "type": "string",
+      "description": "Path within pinned Lawpack, e.g. roles/followup.md"
+    },
+    "lawpackProfileOverlay": {
+      "type": ["string", "null"],
+      "description": "Optional overlay id from MANIFEST optionalProfiles, e.g. lab"
+    },
+    "defaultScheduleMode": {
+      "type": "string",
+      "enum": ["infinite", "cron", "once", "on_event", "manual"]
+    },
+    "defaultReviewMode": {
+      "type": "string",
+      "enum": ["human", "llm_propose", "llm_auto"]
+    },
+    "defaultExecutorId": { "type": ["string", "null"] },
+    "promptTemplateIds": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "References into lawpack/examples/prompts — not SQL prompt bodies"
+    }
+  }
+}

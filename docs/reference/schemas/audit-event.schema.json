@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-kernel.local/schemas/audit-event.schema.json",
+  "title": "AuditEvent",
+  "type": "object",
+  "required": ["id", "at", "actorId", "kind"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "at": { "type": "string", "format": "date-time" },
+    "actorId": { "type": "string", "description": "local-owner or future user id" },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "settings.update",
+        "project.register",
+        "project.init",
+        "assignment.create",
+        "assignment.update",
+        "assignment.pause",
+        "run.nudge",
+        "run.allow",
+        "run.deny",
+        "run.complete",
+        "brief.preview"
+      ]
+    },
+    "projectId": { "type": ["string", "null"] },
+    "assignmentId": { "type": ["string", "null"] },
+    "runId": { "type": ["string", "null"] },
+    "payload": {
+      "type": "object",
+      "description": "Kind-specific metadata (briefHash, denyReason, …) — no secrets"
+    }
+  }
+}

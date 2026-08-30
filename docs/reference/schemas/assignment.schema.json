@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-kernel.local/schemas/assignment.schema.json",
+  "title": "Assignment",
+  "type": "object",
+  "required": ["id", "profileId", "scheduleMode", "reviewMode"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "projectId": { "type": ["string", "null"], "description": "null = global scope" },
+    "profileId": { "type": "string" },
+    "scheduleMode": {
+      "type": "string",
+      "enum": ["infinite", "cron", "once", "on_event", "manual"]
+    },
+    "cronExpr": { "type": ["string", "null"] },
+    "reviewMode": { "type": "string", "enum": ["human", "llm_propose", "llm_auto"] },
+    "runId": { "type": ["string", "null"] },
+    "paused": { "type": "boolean", "default": false },
+    "executorId": { "type": ["string", "null"] },
+    "fanOut": {
+      "type": ["object", "null"],
+      "description": "Required semantics when projectId is null — see orchestration-api.md",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["all_initialized", "tag", "allow_list"]
+        },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "projectIds": { "type": "array", "items": { "type": "string" } },
+        "excludeProjectIds": { "type": "array", "items": { "type": "string" } },
+        "force": { "type": "boolean", "default": false }
+      },
+      "required": ["mode"]
+    }
+  }
+}

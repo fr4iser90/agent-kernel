@@ -16,8 +16,12 @@ It is not a product feature and not GitHub Actions by itself. It is the *idea*:
 
 In this repo:
 
-- `pnpm gate` / `scripts/gate.sh` = **full** local gate (typecheck + test + build + doc presence)
-- **Pre-commit** (below) = **fast** subset so commits stay honest without waiting on a full build every time
+- `pnpm health` / `scripts/health.sh` = smoke `GET /health` (+ optional Web)  
+- `pnpm gate` / `scripts/gate.sh` = **full** local gate (docs presence + **link check** + typecheck + test + build + VitePress)  
+- `pnpm docs:links` = relative markdown link check only  
+- `pnpm dev:docs` / `pnpm build:docs` = VitePress site under `docs/`  
+- **Pre-commit** = fast subset (links + typecheck + test) so commits stay honest  
+- **GitHub Actions** = later (end of roadmap); local gate is enough for now
 
 Full gate still belongs before you call a milestone done; pre-commit catches the
 cheap mistakes early.
