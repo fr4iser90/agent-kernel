@@ -1,0 +1,41 @@
+---
+description: Never add fallbacks, silent defaults, or backdoors — fail loudly
+alwaysApply: true
+---
+
+# No fallbacks / no backdoors
+
+## Hard rule
+
+- **NEVER** add fallbacks, silent defaults, compatibility shims, or “try A then B” paths.
+- **NEVER** add backdoors, hidden env overrides, dual code paths that paper over missing config, or “works anyway” branches.
+- If the real dependency / API / config is missing → **fail loudly** with a clear error. Do not invent a substitute.
+
+## Forbidden patterns
+
+```ts
+// ❌ BAD — fallback
+const endpoint = user.dshEndpoint ?? globalSettings.dshEndpoint ?? 'http://127.0.0.1:13080'
+
+// ❌ BAD — silent catch
+try { await dsh.getTranscript(id) } catch { return [] }
+
+// ❌ BAD — fake capability
+diff = await dsh.diff(id).catch(() => gitDiff(workdir))
+```
+
+```ts
+// ✅ GOOD — require the real thing
+if (!user.dshEndpoint) throw new Error('My Executor: dshEndpoint required')
+return await dsh.getTranscript(id) // errors propagate
+```
+
+## Product implications
+
+- BYO DSH: no shared global executor “just in case”.
+- Transcript / diffs: only via real DSH session APIs — **no** git-diff-as-transcript substitute, **no** empty UI pretending data exists.
+- Auth / connect modes: configure the chosen mode properly; do not auto-switch modes on failure.
+
+## When tempted
+
+Stop. Surface the gap to the user or throw. Do not “make it work” with a fallback.

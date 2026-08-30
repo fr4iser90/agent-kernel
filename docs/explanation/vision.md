@@ -44,7 +44,7 @@ the coding agent itself.
 2. **Settings own policy knobs** — git assert/protect/hooks default **off**;
    pack prose is not automatic enforcement ([`../reference/settings.md`](../reference/settings.md)).
 3. **Deterministic Init by default**; LLM fills gaps and stays reviewable.
-4. **Policy before tokens** — starts pass a policy proxy / SessionBrief gate.
+4. **Policy before tokens** — starts pass in-process start policy / SessionBrief gate.
 5. **DDD from day one** — bounded contexts; no god-services.
 6. **Import checks, not PIDEA wholesale**.
 7. **Login-first UX** — every operator journey starts at `/login`. Local v1 may

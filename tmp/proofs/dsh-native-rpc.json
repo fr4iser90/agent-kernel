@@ -1,0 +1,11 @@
+{
+  "label": "native",
+  "ok": true,
+  "endpoint": "http://127.0.0.1:3080",
+  "trustedHost": "localhost:3080",
+  "sessionId": "session-e71abdf8-3a9e-4ccc-9d08-788331ef7969",
+  "ms": 291,
+  "sessionsListed": 41,
+  "historyEvents": 13,
+  "at": "2026-08-30T17:59:46.163Z"
+}

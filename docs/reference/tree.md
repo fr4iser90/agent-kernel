@@ -49,8 +49,6 @@ agent-kernel/
 │   └── web/
 ├── packages/
 │   └── session-brief/
-├── services/
-│   └── policy-proxy/
 ├── deploy/                      # Compose + Dockerfiles (L-docker / S)
 │   ├── compose.yml
 │   ├── compose.server.yml

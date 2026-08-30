@@ -41,7 +41,7 @@ No side channel. Coding tools (edit file, shell in product) belong to the
 | Capability | Why |
 |------------|-----|
 | Edit product source / PROGRESS as file tools | Coding agent / executor |
-| Call DSH Host bypassing policy-proxy | Policy before tokens |
+| Call DSH Host bypassing API start policy | Policy before tokens |
 | Read raw secrets | Only secret **refs** |
 | Patch `.github/workflows` | Human-owned (LAWS) |
 

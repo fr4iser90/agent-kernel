@@ -1,6 +1,7 @@
 # Remote S override — existing Traefik + optional Postgres (ADR-0005).
 # We do not ship Traefik. Usage:
-#   docker compose -f deploy/compose.yml -f deploy/compose.server.yml up -d
+#   docker compose -f deploy/compose.yml -f deploy/compose.server.yml \
+#     --env-file deploy/.env --env-file deploy/.env.server up -d --build
 #
 # Postgres: set DATABASE_URL (and usually disable SQLite volume as SoT).
 # Example URL: postgres://agent:agent@postgres:5432/agent_kernel
@@ -23,18 +24,28 @@ services:
       retries: 10
 
   api:
-    ports: []  # no host publish; Traefik only
+    ports: !reset []
     environment:
-      # When set, API MUST use Postgres (ADR-0005). Omit to keep SQLite on ak-data.
       DATABASE_URL: ${DATABASE_URL:-}
       DB_PATH: /data/agent-kernel.db
+      WEB_ORIGIN: ${WEB_ORIGIN}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_REDIRECT_URI: ${GITHUB_REDIRECT_URI:-}
+      EXECUTOR_SSH_TUNNEL_TARGET: ${EXECUTOR_SSH_TUNNEL_TARGET:-}
+      EXECUTOR_SSH_TUNNEL_ENDPOINT_HOST: ${EXECUTOR_SSH_TUNNEL_ENDPOINT_HOST:-host.docker.internal}
+      EXECUTOR_SSH_TUNNEL_PORT_BASE: ${EXECUTOR_SSH_TUNNEL_PORT_BASE:-13100}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     labels:
       - traefik.enable=true
-      - traefik.http.routers.ak-api.rule=Host(`${API_HOST:-api.agent-kernel.local}`)
+      - traefik.docker.network=${TRAEFIK_NETWORK:-proxy}
+      - traefik.http.routers.ak-api.rule=Host(`${API_HOST:?set API_HOST}`)
       - traefik.http.routers.ak-api.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
       - traefik.http.routers.ak-api.tls=true
+      - traefik.http.routers.ak-api.tls.certresolver=${CERT_RESOLVER:-http_resolver}
       - traefik.http.services.ak-api.loadbalancer.server.port=8787
-      - traefik.docker.network=${TRAEFIK_NETWORK:-proxy}
     networks:
       - default
       - proxy
@@ -47,15 +58,20 @@ services:
         required: false
 
   web:
-    ports: []
+    ports: !reset []
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:?set VITE_API_BASE}
     labels:
       - traefik.enable=true
-      - traefik.http.routers.ak-web.rule=Host(`${WEB_HOST:-agent-kernel.local}`)
+      - traefik.docker.network=${TRAEFIK_NETWORK:-proxy}
+      - traefik.http.routers.ak-web.rule=Host(`${WEB_HOST:?set WEB_HOST}`)
       - traefik.http.routers.ak-web.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
       - traefik.http.routers.ak-web.tls=true
+      - traefik.http.routers.ak-web.tls.certresolver=${CERT_RESOLVER:-http_resolver}
       - traefik.http.services.ak-web.loadbalancer.server.port=80
-      - traefik.docker.network=${TRAEFIK_NETWORK:-proxy}
-      - traefik.http.routers.ak-web.middlewares=${AUTH_MIDDLEWARE:-}
     networks:
       - default
       - proxy

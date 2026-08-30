@@ -1,31 +1,14 @@
-import Database from 'better-sqlite3'
-import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import type Database from 'better-sqlite3'
 import type { Project, ProjectId, RegisterProjectInput } from '../../domain/catalog/project.js'
 import type { ProjectRepository } from '../../domain/catalog/project-repository.js'
 
-export function openSqlite(dbPath: string): Database.Database {
-  mkdirSync(dirname(dbPath), { recursive: true })
-  const db = new Database(dbPath)
-  db.pragma('journal_mode = WAL')
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      owner_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      local_path TEXT NOT NULL,
-      git_remote TEXT,
-      status TEXT NOT NULL,
-      lawpack_version TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id);
-  `)
-  return db
-}
-
 function rowToProject(row: Record<string, unknown>): Project {
+  let meta: Record<string, unknown> = {}
+  try {
+    meta = JSON.parse(String(row.meta_json ?? '{}')) as Record<string, unknown>
+  } catch {
+    meta = {}
+  }
   return {
     id: String(row.id),
     ownerId: String(row.owner_id),
@@ -34,6 +17,7 @@ function rowToProject(row: Record<string, unknown>): Project {
     gitRemote: row.git_remote == null ? null : String(row.git_remote),
     status: row.status as Project['status'],
     lawpackVersion: row.lawpack_version == null ? null : String(row.lawpack_version),
+    meta,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -44,9 +28,7 @@ export class SqliteProjectRepository implements ProjectRepository {
 
   listByOwner(ownerId: string): Project[] {
     const rows = this.db
-      .prepare(
-        `SELECT * FROM projects WHERE owner_id = ? ORDER BY created_at DESC`,
-      )
+      .prepare(`SELECT * FROM projects WHERE owner_id = ? ORDER BY created_at DESC`)
       .all(ownerId) as Record<string, unknown>[]
     return rows.map(rowToProject)
   }
@@ -64,8 +46,8 @@ export class SqliteProjectRepository implements ProjectRepository {
     this.db
       .prepare(
         `INSERT INTO projects
-         (id, owner_id, name, local_path, git_remote, status, lawpack_version, created_at, updated_at)
-         VALUES (@id, @ownerId, @name, @localPath, @gitRemote, 'registered', NULL, @now, @now)`,
+         (id, owner_id, name, local_path, git_remote, status, lawpack_version, meta_json, created_at, updated_at)
+         VALUES (@id, @ownerId, @name, @localPath, @gitRemote, 'registered', NULL, '{}', @now, @now)`,
       )
       .run({
         id: input.id,
@@ -78,5 +60,27 @@ export class SqliteProjectRepository implements ProjectRepository {
     const created = this.getById(input.id)
     if (!created) throw new Error('insert failed')
     return created
+  }
+
+  update(project: Project): Project {
+    this.db
+      .prepare(
+        `UPDATE projects SET name=@name, local_path=@localPath, git_remote=@gitRemote,
+         status=@status, lawpack_version=@lawpackVersion, meta_json=@meta, updated_at=@updatedAt
+         WHERE id=@id`,
+      )
+      .run({
+        id: project.id,
+        name: project.name,
+        localPath: project.localPath,
+        gitRemote: project.gitRemote,
+        status: project.status,
+        lawpackVersion: project.lawpackVersion,
+        meta: JSON.stringify(project.meta ?? {}),
+        updatedAt: project.updatedAt,
+      })
+    const updated = this.getById(project.id)
+    if (!updated) throw new Error('update failed')
+    return updated
   }
 }

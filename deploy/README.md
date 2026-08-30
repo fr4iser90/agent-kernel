@@ -16,10 +16,16 @@ Canonical Docker layout for the control plane. Matches
 cp deploy/.env.example deploy/.env   # optional; defaults work without
 docker compose -f deploy/compose.yml up --build
 
-# Remote (S) — Traefik attach
-cp deploy/.env.server.example deploy/.env.server
+# Remote (S) — Traefik attach (DNS A/AAAA for WEB_HOST + API_HOST must exist first)
+cp deploy/.env.server.example deploy/.env.server   # fill secrets
+mkdir -p "${WORKSPACE_ROOT:-/home/docker/docker/agent-kernel/workspaces}"
 docker compose -f deploy/compose.yml -f deploy/compose.server.yml \
   --env-file deploy/.env --env-file deploy/.env.server up -d --build
+
+# Required DNS (same IP as fr4iser-deepseek.fr4iser.com / Traefik):
+#   agent-kernel.fr4iser.com
+#   api.agent-kernel.fr4iser.com
+# GitHub OAuth App callback must match GITHUB_REDIRECT_URI.
 
 # Remote + Postgres (ADR-0005)
 # Set DATABASE_URL=postgres://agent:agent@postgres:5432/agent_kernel in .env.server
@@ -45,13 +51,26 @@ Native host still uses `pnpm dev` from the repo root (L-native).
 |---------|-------------|-----------------|
 | `api` | `Dockerfile.api` | `8787` |
 | `web` | `Dockerfile.web` | `5173` (dev) / `8080` (static) |
-| `policy-proxy` | optional profile | internal |
 
-DSH and GateWay stay **external**. Configure their URLs in **Settings**
-(after Login / setup wizard), not in this `.env`.
+Start checks (init/path/optional git policy) run **in-process** in the API before `ExecutorPort` — no sidecar container.
 
-## Volumes
+## Local DSH for ExecutorPort
 
-- `ak-data` — SQLite when `DATABASE_URL` unset  
-- `ak-pgdata` — Postgres data when `--profile postgres`  
-- `WORKSPACE_ROOT` — optional bind-mount for product clones  
+```bash
+cd ~/Documents/Git/deepseek-harness
+docker build -f deploy/Dockerfile -t dsh-web:local .
+mkdir -p /tmp/dsh-ws /tmp/dsh-data
+cp deploy/settings.yaml /tmp/dsh-data/settings.yaml
+cd ~/Documents/Git/agent-kernel
+docker compose -f deploy/compose.dsh-local.yml up -d
+```
+
+Then in agent-kernel Setup wizard:
+
+- `dshEndpoint`: `http://127.0.0.1:13080`
+- `dshTrustedHost`: `127.0.0.1:13080` (must match URL host — use the same host form)
+- Basic auth empty for local
+
+**Host note:** URL host and `dshTrustedHost` must be identical (`127.0.0.1:13080` **or** `localhost:13080`, not mixed). Set DSH `TRUSTED_HOST` to the same value.
+
+Remote Traefik: set endpoint to `https://fr4iser-deepseek.fr4iser.com` and fill basic auth.

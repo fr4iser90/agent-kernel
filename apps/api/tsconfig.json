@@ -7,10 +7,12 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "outDir": "dist",
-    "rootDir": "src",
     "declaration": true,
     "resolveJsonModule": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@agent-kernel/session-brief": ["../../packages/session-brief/src/index.ts"]
+    }
   },
   "include": ["src/**/*"]
 }

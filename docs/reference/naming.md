@@ -24,7 +24,6 @@ agent-kernel/           # PRODUCT repo name
 ├── apps/web            # React dashboard
 ├── lawpack/            # ← the pack (versioned, planted elsewhere)
 ├── packages/           # shared TS libs (e.g. session-brief)
-├── services/           # deployables (policy-proxy) — app code
 ├── deploy/             # Docker/Compose/Traefik for THIS product (not lawpack)
 ├── docs/               # product docs + ADRs
 ├── scripts/            # gate + pack-lawpack for THIS repo
@@ -39,7 +38,6 @@ agent-kernel/           # PRODUCT repo name
 | `apps/` | Runnable product apps | Law text (except reading lawpack at init) |
 | `docs/` | Architecture for control plane | Per-product fantasy (that stays in products) |
 | `packages/` | Publishable TS schemas/utils | UI pages |
-| `services/` | Sidecar **source** (policy-proxy) | Domain logic (lives in api/domain); Compose files |
 | `deploy/` | Dockerfiles, Compose, Traefik labels, `.env.example` | Application business logic |
 
 ### Docker layout (`deploy/`)
@@ -125,7 +123,7 @@ Plant-path alternatives (document in ADAPTER):
 | Move / don’t plant | Why |
 |--------------------|-----|
 | Control-plane `docs/*` | Product of agent-kernel, not every app |
-| `apps/`, `services/` | Not laws |
+| `apps/` | Product code (api / web). No `services/` sidecar containers. |
 
 ## Control-plane domain names (stable)
 

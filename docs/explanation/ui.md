@@ -45,7 +45,7 @@ IDE transcript.
 | **Projects overview** (default on Overview) | “Which gates are red?” | list projects, health widgets, global assignments |
 | **Project** (on project detail) | “Nudge tracking-cycle”, “Show brief” | this `projectId` only + its assignments |
 | **Orchestrator** | “Pause all infinite runs”, “Global security cron” | assignments, runs, schedules |
-| **Deep link to DSH** | “Open / start Followup session” | policy-proxy → DSH start/attach (no coding inside kernel chat) |
+| **Deep link to DSH** | “Open / start Followup session” | API start policy → DSH start/attach (no coding inside kernel chat) |
 
 LLM for operator chat = **LocalAI-GateWay** (control-plane keys).  
 Coding tokens stay on the DSH → GateWay path.
@@ -61,7 +61,7 @@ You ──typed message──► agent-kernel chat API
                          │         ──► Orchestration (nudge, pause, brief)
                          │         ──► Observability (gate/bugs summary)
                          │
-                         └─ optional ──► policy-proxy ──► DSH Host
+                         └─ tools ──► API start policy ──► ExecutorPort
                                               (start/nudge session only)
 ```
 
@@ -170,28 +170,27 @@ placeholders.
 - [x] **Project detail page** (not only a flat list)  
 - [x] Protect/assert **green/red** on project + overview  
 - [ ] Monorepo: choose workspace package at Init  
-- [ ] Assignment edit / pause / delete  
-- [ ] **Nudge now** + last run status (even if CLI-backed at first)  
-- [x] Attention strip on Overview  
-- [ ] **Operator chat** (overview + project + orchestrator scope) with tools on the same API  
+- [x] Assignment edit / pause / delete
+- [x] **Nudge now** + last run status (even if CLI-backed at first)
+- [x] Attention strip on Overview
+- [ ] **Operator chat** (overview + project + orchestrator scope) with tools on the same API
 
 ### Needed for “agents really run” (M4)
 
-- [ ] Runs page (session id, outcome, link to Brief)  
-- [ ] Schedule controls that match executor (infinite / cron / manual)  
-- [ ] Settings: DSH endpoint / workspace root (local vs server)  
-- [ ] Chat tool: start/attach DSH via policy-proxy  
+- [x] Runs page (session id, outcome, link to Brief)
+- [x] Schedule controls that match executor (infinite / cron / manual)
+- [x] Settings: DSH endpoint / workspace root / connect modes
+- [x] Start policy in API before ExecutorPort (no sidecar)
+- [ ] Chat tool: start/attach DSH via API (same start policy as buttons)
+- [x] LLM review mode UI (`llm_propose` approve/reject)
 
 ### Later
 
-- [ ] Widget layout editor  
-- [ ] BUGS/PROGRESS preview  
-- [x] Login as Web UI entry (`/login`); remote requires real auth  
-- [ ] Codegraph page (M5)  
-- [ ] LLM review mode UI (`llm_propose` diffs)  
-- [ ] Optional `/chat` full page + streamed tool traces (ops, not IDE)  
-
----
+- [ ] Widget layout editor
+- [ ] BUGS/PROGRESS preview
+- [x] Login as Web UI entry (`/login`); remote requires real auth
+- [ ] Codegraph page (M5)
+- [ ] Optional `/chat` full page + streamed tool traces (ops, not IDE)
 
 ## Visual style
 

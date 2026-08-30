@@ -45,9 +45,11 @@ See [`ui.md`](ui.md), [`../reference/analyzer.md`](../reference/analyzer.md),
 
 ## M4 — Orchestration + DSH
 
-- Nudge scheduler  
-- Policy proxy MVP  
-- Attach/start DSH session with brief  
+- [x] Nudge scheduler (cron / infinite / once / manual)
+- [x] In-process start policy before ExecutorPort (no sidecar)
+- [x] Attach/start DSH session with brief (`dsh` executor)
+- [x] Review queue: `llm_propose` → awaiting_review → approve/reject
+- [ ] Operator chat tools (optional later)
 
 ## M5 — Knowledge (optional)
 

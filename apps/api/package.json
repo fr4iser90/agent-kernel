@@ -8,9 +8,11 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "start": "tsx src/presentation/main.ts"
   },
   "dependencies": {
+    "@agent-kernel/session-brief": "workspace:*",
     "@hono/node-server": "^1.14.1",
     "better-sqlite3": "^11.9.1",
     "hono": "^4.7.5",
@@ -19,6 +21,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.13.10",
+    "@vitest/coverage-v8": "3.2.7",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"

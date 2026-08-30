@@ -1,0 +1,11 @@
+{
+  "label": "docker",
+  "ok": true,
+  "endpoint": "http://127.0.0.1:13080",
+  "trustedHost": "localhost:13080",
+  "sessionId": "session-1e89f35b-2a52-4b04-a109-03452db5e45a",
+  "ms": 142,
+  "sessionsListed": 13,
+  "historyEvents": 6,
+  "at": "2026-08-30T17:59:46.306Z"
+}

@@ -13,8 +13,8 @@
                              │                        │ pin delivery
                              ▼                        ▼
                     ┌──────────────────┐     ┌─────────────────┐
-                    │ Policy Proxy     │────►│ ExecutorPort    │
-                    │ (Brief → start)  │     │ (DSH v1, …)     │
+                    │ Start policy     │────►│ ExecutorPort    │
+                    │ (in API, Brief)  │     │ (DSH v1, …)     │
                     └────────┬─────────┘     └─────────────────┘
                              │
               chat/embed keys│
@@ -41,18 +41,18 @@ operator chose hybrid tracking files under inject). See
 DSH (and later adapters) **read** laws from the configured layout or from the
 injected Brief — they do not own the Lawpack source.
 
-Git plant and policy proxy are **both** valid jobs when selected — different
+Git plant and start policy are **both** valid jobs when selected — different
 responsibilities, not alternatives that cancel each other.
 
 ### Where does policy sit?
 
-**Recommended:** thin **Policy Proxy** in front of the executor:
+**In-process** in the API before `ExecutorPort` — **not** a separate service:
 
-1. UI / nudge / operator chat → control plane: start on project X  
-2. Control plane builds **SessionBrief** (RUN_ID, roles, gate, paths, profile)  
-3. Proxy sets workdir; injects brief; denies tools that violate **enabled** Settings  
+1. UI / nudge / operator chat → control plane: start on project X
+2. Control plane builds **SessionBrief** (RUN_ID, roles, gate, paths, profile)
+3. `policy-authorize` allow/deny; injects brief; denies starts that violate **enabled** Settings
 4. Coding model traffic may still be executor → GateWay; control plane uses
-   GateWay for operator LLM / embeddings  
+   GateWay for operator LLM / embeddings
 
 Do **not** fork DeepSeek Harness into this monorepo.
 

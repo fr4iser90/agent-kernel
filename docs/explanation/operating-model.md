@@ -256,7 +256,7 @@ User Init wizard (pick harness_inject | repo_plant)
   → stubs (+ vendor/ if repo_plant) + Assignment + lawpack pin in DB
 User or cron “Nudge”
   → kernel builds SessionBrief
-  → policy-proxy allow + workdir
+  → API start-policy allow + workdir
   → if harness_inject: ephemeral laws / prompt into executor
   → ExecutorPort (DSH v1; later Claude/Pi) start/resume
   → agent uses roles + PROGRESS/BUGS; commits on RUN_ID

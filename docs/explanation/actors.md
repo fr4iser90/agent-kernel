@@ -49,7 +49,7 @@ agent-kernel. Product coding agents should **not** be pointed at the whole
 | When to nudge | **Human** schedule / button / operator chat |
 | How to implement the feature | **Coding agent** inside the product workdir |
 | CI / deploy YAML | **Human** (hard stop in LAWS) |
-| SessionBrief allow/deny start | **Control plane** (+ policy-proxy when used) |
+| SessionBrief allow/deny start | **Control plane** (in-process start policy) |
 | Model weights / keys | **Human** / GateWay secrets |
 
 ---
@@ -74,5 +74,5 @@ Operator LLM ──tools──► agent-kernel API ──nudge──► Executor
 ## Related
 
 - Dual injection: [ADR-0004](../adr/0004-dual-injection-multi-executor.md)  
-- Policy proxy contract: [`../reference/policy-proxy.md`](../reference/policy-proxy.md)  
+- Start policy: [`../reference/start-policy.md`](../reference/start-policy.md)  
 - Generic vs game overlay: `lawpack/LAWS.md` + `lawpack/profiles/games.md`  

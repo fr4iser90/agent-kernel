@@ -6,9 +6,8 @@ export default defineConfig({
   lang: 'en-US',
   cleanUrls: true,
   ignoreDeadLinks: [
-    // Pack + service stubs live outside the VitePress root
+    // Pack stubs live outside the VitePress root
     /\/lawpack\//,
-    /\/services\//,
   ],
   themeConfig: {
     nav: [
@@ -43,7 +42,7 @@ export default defineConfig({
           { text: 'Orchestration API', link: '/reference/orchestration-api' },
           { text: 'Inject runtime', link: '/reference/inject-runtime' },
           { text: 'Lawpack', link: '/reference/lawpack' },
-          { text: 'Policy proxy', link: '/reference/policy-proxy' },
+          { text: 'Start policy', link: '/reference/start-policy' },
           { text: 'Operator tools', link: '/reference/operator-tools' },
           { text: 'Analyzer', link: '/reference/analyzer' },
           { text: 'Naming', link: '/reference/naming' },

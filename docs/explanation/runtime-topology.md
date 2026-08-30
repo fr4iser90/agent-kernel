@@ -21,8 +21,8 @@ You
  └─ (optional) DSH Web UI            watch a session — not required for nudge
 
 agent-kernel API
- └─ Orchestration / policy-proxy
-      └─ DSH Host (CLI or HTTP)      cwd = product workdir + SessionBrief
+ └─ Orchestration + in-process start policy
+      └─ ExecutorPort → DSH Host (CLI or HTTP)   cwd = product workdir + SessionBrief
            └─ GateWay → models
 ```
 
@@ -32,8 +32,8 @@ agent-kernel API
 | **Lawpack on disk** | product repo `vendor/lawpack/` | DSH reads laws offline from cwd |
 | **Start / nudge / attach** | Orchestration → DSH | CLI first; Host API when DSH already running |
 
-Dashboard **configures**. DSH **executes**. Policy proxy (thin) sits between so
-“start run” is authorized and workdir/brief match the Project.
+Dashboard **configures**. DSH **executes**. Start policy runs **inside the API**
+so “start run” is authorized and workdir/brief match the Project — **no** sidecar.
 
 ---
 
@@ -78,15 +78,14 @@ Compose and Dockerfiles for **this** product live under **`deploy/`**
 `deploy/` in the harness repo; agent-kernel compose joins the same Docker
 network (e.g. Traefik `proxy`) and shares a host workspace volume root.
 
-On the server, prefer **one Docker Compose (or stack) network**: agent-kernel,
-policy-proxy, DSH, and (already) Traefik / GateWay. Auth at Traefik — never
-expose raw DSH.
+On the server, prefer **one Docker Compose (or stack) network**: agent-kernel
+API + web, DSH, and (already) Traefik / GateWay. Auth at Traefik — never
+expose raw DSH. Start policy stays **in-process** in the API (no extra container).
 
 ```text
 Server (Docker)
  ├─ Traefik (+ auth)             public HTTPS
  ├─ agent-kernel API + web       internal + optional UI route
- ├─ policy-proxy                 only caller allowed to start DSH runs
  ├─ DSH container(s)             /workspace ← host volume
  └─ GateWay / AgentLayer         as today
 ```
@@ -96,8 +95,7 @@ Server (Docker)
 | From → To | How |
 |-----------|-----|
 | Browser → kernel UI/API | Traefik HTTPS |
-| kernel → policy-proxy | Docker DNS, e.g. `http://policy-proxy:…` |
-| policy-proxy → DSH | Docker DNS / DSH Host API (not the public URL) |
+| kernel API → DSH | Connect mode (`public_url` / `ssh_reverse` / `vpn` / `same_host`) — Host API |
 | DSH → GateWay | internal URL or Traefik |
 | kernel/DSH → **git remotes** | HTTPS/SSH out (credentials via env/secrets) |
 

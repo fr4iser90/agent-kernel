@@ -20,10 +20,12 @@ test -f docs/reference/schemas/settings.schema.json
 test -f docs/reference/schemas/init.schema.json
 test -f lawpack/MANIFEST.json
 test -d lawpack/roles
-test -d apps/api/domain/catalog
-test -d services/policy-proxy
+test -d apps/api/src/domain/catalog
+test -f apps/api/src/application/policy-authorize.ts
 test -f deploy/compose.yml
 test -f deploy/compose.server.yml
+test ! -d services/policy-proxy
+test ! -f deploy/Dockerfile.policy-proxy
 
 echo "gate: doc link check"
 bash scripts/check-doc-links.sh
@@ -36,8 +38,9 @@ fi
 echo "gate: typecheck"
 pnpm run typecheck
 
-echo "gate: test"
-pnpm run test
+echo "gate: test + coverage (>60%)"
+pnpm --filter @agent-kernel/api run test:coverage
+pnpm --filter @agent-kernel/web run test
 
 echo "gate: build"
 pnpm run build

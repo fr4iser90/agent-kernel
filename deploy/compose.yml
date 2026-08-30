@@ -11,6 +11,14 @@ services:
       PORT: "8787"
       DB_PATH: /data/agent-kernel.db
       WORKSPACE_ROOT: ${WORKSPACE_ROOT:-/workspaces}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://127.0.0.1:8080}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_REDIRECT_URI: ${GITHUB_REDIRECT_URI:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      EXECUTOR_SSH_TUNNEL_TARGET: ${EXECUTOR_SSH_TUNNEL_TARGET:-}
+      EXECUTOR_SSH_TUNNEL_ENDPOINT_HOST: ${EXECUTOR_SSH_TUNNEL_ENDPOINT_HOST:-host.docker.internal}
+      EXECUTOR_SSH_TUNNEL_PORT_BASE: ${EXECUTOR_SSH_TUNNEL_PORT_BASE:-13100}
     volumes:
       - ak-data:/data
       - ${WORKSPACE_ROOT:-./workspaces}:/workspaces:rw
@@ -27,19 +35,13 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.web
       args:
-        VITE_API_BASE: ${VITE_API_BASE:-http://127.0.0.1:8787}
+        # Empty = same-origin via nginx /api proxy (local Docker)
+        VITE_API_BASE: ${VITE_API_BASE:-}
     ports:
       - "${WEB_PORT:-8080}:80"
     depends_on:
       api:
         condition: service_healthy
-
-  policy-proxy:
-    profiles: ["proxy"]
-    image: ${POLICY_PROXY_IMAGE:-nginx:alpine}
-    # Replace with services/policy-proxy image when implemented.
-    networks: [default]
-    depends_on: [api]
 
 volumes:
   ak-data:

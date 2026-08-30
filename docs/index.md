@@ -32,9 +32,9 @@ GitHub browsing: this file is the VitePress home. Flat index mirror: [`readme.md
 | [`reference/settings.md`](reference/settings.md) | Global settings schema, git policy, anti-hardcode |
 | [`reference/schemas/readme.md`](reference/schemas/readme.md) | JSON Schema + OpenAPI for Settings / Init |
 | [`reference/lawpack.md`](reference/lawpack.md) | Pack contract + `MANIFEST.json` |
-| [`reference/data-model.md`](reference/data-model.md) | What is stored where (DB vs files vs proxy) |
+| [`reference/data-model.md`](reference/data-model.md) | What is stored where (DB vs files) |
 | [`reference/inject-runtime.md`](reference/inject-runtime.md) | harness_inject materialization |
-| [`reference/policy-proxy.md`](reference/policy-proxy.md) | Authorize + Brief before executor |
+| [`reference/start-policy.md`](reference/start-policy.md) | In-process authorize before executor |
 | [`reference/orchestration-api.md`](reference/orchestration-api.md) | Fan-out + schedule contract |
 | [`reference/operator-tools.md`](reference/operator-tools.md) | Operator chat tools ↔ API |
 | [`reference/analyzer.md`](reference/analyzer.md) | Facts, preferences, advice |

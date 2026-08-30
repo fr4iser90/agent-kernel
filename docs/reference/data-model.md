@@ -18,12 +18,10 @@ Human / Operator LLM
  agent-kernel API  ──reads/writes──►  Control-plane DB
         │                              (catalog, settings, pins,
         │                               assignments, run metadata)
+        │  authorize in-process
         ▼
- policy-proxy (stateless)  ──Brief──►  ExecutorPort (DSH / …)
-                                            │
-                                            ▼
-                                      Product workdir + Lawpack
-                                      (prompts/laws on disk or inject)
+ ExecutorPort (DSH / …)  ──Brief──►  Product workdir + Lawpack
+                                     (prompts/laws on disk or inject)
 ```
 
 | Traffic | Goes to control-plane DB? |
@@ -99,16 +97,16 @@ Control plane **MUST NOT** treat SQL as the authoring SoT for law/role prose.
 
 ---
 
-## 5. Policy-proxy persistence
+## 5. Start-policy persistence
 
 | Concern | Rule |
 |---------|------|
-| Durable store | **MUST NOT** — proxy is **stateless** |
-| Brief source | Rebuild or fetch from API using assignment/run ids |
-| Allow/deny audit | Written by **API** (or API after proxy callback), not a proxy-local DB |
+| Durable store | **MUST NOT** — authorize is in-process, no sidecar DB |
+| Brief source | Built by API from assignment/run ids |
+| Allow/deny audit | Written by **API** only |
 | Inject cache | Optional tmp only; no cross-reboot SoT |
 
-Contract: [`policy-proxy.md`](policy-proxy.md).
+Contract: [`start-policy.md`](start-policy.md).
 
 ---
 

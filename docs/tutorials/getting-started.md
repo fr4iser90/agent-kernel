@@ -80,13 +80,12 @@ is not required.
 
 1. Docker + Docker Compose  
 2. `deploy/` **local** Compose profile (API + Web + DB volume)  
-3. Optional on same Compose network: policy-proxy  
-4. DSH — local container **or** native talking to published Host port  
-5. GateWay reachable (host or container)  
-6. Bind-mount product paths **or** a local workspace root into API+DSH  
-7. Secrets via `.env` / Compose  
-8. Lawpack path/volume for API  
-9. Smoke: localhost UI → register path → Init → Brief → one DSH nudge  
+3. DSH — local container **or** native (Executor connect mode)  
+4. GateWay reachable (host or container)  
+5. Bind-mount product paths **or** a local workspace root into API+DSH  
+6. Secrets via `.env` / Compose  
+7. Lawpack path/volume for API  
+8. Smoke: localhost UI → register path → Init → Brief → one DSH nudge  
 
 L-docker validates image and mount behavior prior to remote deployment.
 
@@ -104,14 +103,13 @@ remote. Ingress: Traefik HTTPS. DSH Host API remains internal-only.
 5. agent-kernel Web  
 6. Persistent DB volume  
 7. Host `WORKSPACE_ROOT` bind-mounted into kernel **and** DSH  
-8. policy-proxy on Docker network  
-9. DSH container(s) — internal Host API only  
-10. GateWay — internal URL  
-11. Secrets (GateWay, git, DSH)  
-12. Outbound git to remotes  
-13. Lawpack for API  
-14. Optional: AgentLayer  
-15. Optional: other executor adapters  
+8. DSH container(s) — internal Host API only; BYO via connect modes  
+9. GateWay — internal URL  
+10. Secrets (GateWay, git, DSH)  
+11. Outbound git to remotes  
+12. Lawpack for API  
+13. Optional: AgentLayer  
+14. Optional: other executor adapters  
 16. Smoke: Traefik→UI, provision from `gitRemote`, Init, Brief, one DSH session  
 
 Server Catalog: **`gitRemote` required** for normal provision; path on workspace volume.

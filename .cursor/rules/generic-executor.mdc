@@ -1,0 +1,35 @@
+---
+description: ExecutorPort is generic — one adapter folder/file per executor, never mix
+alwaysApply: true
+---
+
+# Generic executor layout
+
+## Contract (shared)
+
+`packages/session-brief` → `ExecutorPort` + `SessionBrief` + `ExecutorTranscript` only.
+
+## Adapters (one folder each)
+
+```
+infrastructure/
+  executor/create-executor.ts     # registry by executorId
+  executor/not-implemented.ts     # shared throw helper
+  dsh/          # implemented (host client + executors + map-history)
+  pi/
+  claude-code/
+  aider/
+  opencode/
+  goose/
+  codex/
+  cursor-agent/
+```
+
+Inside each vendor folder, local helpers may be named `mapHistoryToTranscript` — **same generic name**, never `mapDsh*` / `mapPi*` in shared code. Path = vendor scope.
+
+## Rules
+
+- Kernel → `createExecutor(settings)` only.
+- No vendor imports in kernel/web/shared.
+- Placeholders **throw** — no FakeExecutor, no empty success.
+- Implemented today: `dsh`. Placeholders: `pi`, `claude-code`, `aider`, `opencode`, `goose`, `codex`, `cursor-agent`.

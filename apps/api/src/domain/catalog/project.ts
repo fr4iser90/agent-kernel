@@ -12,12 +12,14 @@ export interface Project {
   gitRemote: string | null
   status: ProjectStatus
   lawpackVersion: string | null
+  meta: Record<string, unknown>
   createdAt: string
   updatedAt: string
 }
 
 export interface RegisterProjectInput {
   name: string
+  /** Absolute path on the control-plane host (OpenAPI: path). */
   localPath: string
   gitRemote?: string | null
 }

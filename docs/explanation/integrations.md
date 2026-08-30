@@ -10,7 +10,7 @@
   - injects SessionBrief (RUN_ID, roles, gate, denylist),
   - records session id + outcome in Orchestration context.
 - VS Code DSH extension remains the human sidecar; remote dashboard uses the
-  same policy proxy.
+  same in-process start policy before ExecutorPort.
 
 **Local-first → Docker server, volumes, git workspaces:** see
 [`runtime-topology.md`](runtime-topology.md).
@@ -24,7 +24,7 @@
   - embeddings for Knowledge/codegraph (llama.cpp backends behind GateWay).
 - Product **coding** agents may use GateWay **through DSH** as today (separate
   path from operator chat).
-- **Policy proxy** should sit so “start autonomous run” is authorized by
+- **Start policy** runs in the API so “start autonomous run” is authorized by
   control plane identity, not a raw DSH URL alone.
 
 See [`ui.md`](ui.md) § “Two different chats”.

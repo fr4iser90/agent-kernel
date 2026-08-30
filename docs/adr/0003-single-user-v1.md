@@ -23,7 +23,7 @@ Rules:
 
 1. Domain `identity` exists as a stub; v1 always resolves to one owner.  
 2. Do not build teams/roles UI in M1–M5.  
-3. Policy proxy / DSH nudge still attributed to that owner for future audit.  
+3. Start policy / DSH nudge still attributed to that owner for future audit.  
 4. Remote deploy must not expose an unauthenticated dashboard on the public net.  
 5. **Operator journey** always starts at an authentication gate (`/login`). Local
    v1 may resolve that gate to the implicit `local-owner` without credentials;
