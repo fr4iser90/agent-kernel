@@ -1,14 +1,10 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { execFileSync } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 import { Kernel } from '../src/application/kernel.js'
 import { openSqlite } from '../src/infrastructure/sqlite/db.js'
 import { SqliteProjectRepository } from '../src/infrastructure/sqlite/project-repository.js'
 import { SqliteSettingsRepository } from '../src/infrastructure/sqlite/settings-repository.js'
 import { createApp } from '../src/presentation/app.js'
-import { scanLocalGitRoots } from '../src/infrastructure/catalog/local-and-github.js'
 import { cronMatches } from '../src/infrastructure/cron.js'
 import { GitHubClient } from '../src/infrastructure/github/github-client.js'
 
@@ -16,17 +12,8 @@ function testKernel(repoRoot = join(process.cwd(), '..', '..')) {
   const db = openSqlite(':memory:')
   const projects = new SqliteProjectRepository(db)
   const settingsRepo = new SqliteSettingsRepository(db)
-  return new Kernel({ db, projects, settingsRepo, repoRoot })
-}
-
-function gitInit(dir: string) {
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'README.md'), '# t\n')
-  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' })
-  execFileSync('git', ['config', 'user.email', 't@t.t'], { cwd: dir, stdio: 'ignore' })
-  execFileSync('git', ['config', 'user.name', 't'], { cwd: dir, stdio: 'ignore' })
-  execFileSync('git', ['add', '.'], { cwd: dir, stdio: 'ignore' })
-  execFileSync('git', ['commit', '-m', 'i'], { cwd: dir, stdio: 'ignore' })
+  const k = new Kernel({ db, projects, settingsRepo, repoRoot })
+  return k
 }
 
 describe('cron', () => {
@@ -34,17 +21,6 @@ describe('cron', () => {
     expect(cronMatches('* * * * *', new Date('2026-01-01T00:00:00Z'))).toBe(true)
     expect(cronMatches('0 3 * * *', new Date('2026-01-01T03:00:00Z'))).toBe(true)
     expect(cronMatches('0 3 * * *', new Date('2026-01-01T04:00:00Z'))).toBe(false)
-  })
-})
-
-describe('scanLocalGitRoots', () => {
-  it('finds nested git dirs at top level', () => {
-    const root = mkdtempSync(join(tmpdir(), 'ak-scan-'))
-    gitInit(join(root, 'alpha'))
-    mkdirSync(join(root, 'notgit'))
-    writeFileSync(join(root, 'x.zip'), 'z')
-    const found = scanLocalGitRoots(root)
-    expect(found.map((f) => f.name)).toEqual(['alpha'])
   })
 })
 
@@ -74,7 +50,7 @@ describe('GitHubClient', () => {
                 default_branch: 'main',
                 description: null,
                 pushed_at: null,
-                language: 'JS',
+                language: 'JS'
               },
             ]),
           )
@@ -100,72 +76,72 @@ describe('GitHubClient', () => {
       clientId: 'a',
       clientSecret: 'b',
       code: 'c',
-      redirectUri: 'http://x',
+      redirectUri: 'http://x'
     })
     expect(t.access_token).toBe('gho_x')
   })
 })
 
-describe('e2e auth + catalog + analyze', () => {
+describe('e2e auth + catalog', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('local login → setup → scan → analyze', async () => {
+  it('local login → setup → register opaque paths → init DB-only', async () => {
     const kernel = testKernel()
     const app = createApp(kernel)
     const reg = await app.request('/api/auth/register', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username: 'e2euser', password: 'secret123' }),
+      body: JSON.stringify({ username: 'e2euser', password: 'secret123' })
     })
     expect(reg.status).toBe(201)
     const { token } = (await reg.json()) as { token: string }
-    await app.request('/api/me/executor', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', 'x-ak-session': token },
-      body: JSON.stringify({
-        executorPaired: true,
-      }),
-    })
     const hdr = { 'content-type': 'application/json', 'x-ak-session': token }
+
+    const { ownerId } = (await (
+      await app.request('/api/auth/me', { headers: hdr })
+    ).json()) as { ownerId: string }
+    kernel.markExecutorPaired(ownerId)
 
     await app.request('/api/settings', {
       method: 'PUT',
       headers: hdr,
       body: JSON.stringify({
-        executorPaired: true,
-        setupCompleted: true,
-        githubCloneRoot: mkdtempSync(join(tmpdir(), 'ghclone-')),
-        githubDefaultLogin: 'fr4iser90',
-      }),
+        githubDefaultLogin: 'fr4iser90'
+      })
     })
 
-    const root = mkdtempSync(join(tmpdir(), 'ak-gitroot-'))
-    gitInit(join(root, 'proj-a'))
-    gitInit(join(root, 'proj-b'))
+    for (const name of ['proj-a', 'proj-b']) {
+      const created = await app.request('/api/projects', {
+        method: 'POST',
+        headers: hdr,
+        body: JSON.stringify({ name, path: `/executor/workdir/${name}` })
+      })
+      expect(created.status).toBe(201)
+      const { project } = (await created.json()) as { project: { id: string; localPath: string } }
+      expect(project.localPath).toBe(`/executor/workdir/${name}`)
 
-    const scan = await app.request('/api/catalog/scan-local', {
-      method: 'POST',
-      headers: hdr,
-      body: JSON.stringify({ path: root, analyze: true }),
-    })
-    expect(scan.status).toBe(200)
-    const scanJson = (await scan.json()) as { registered: unknown[]; analyzed: unknown[] }
-    expect(scanJson.registered.length).toBe(2)
-    expect(scanJson.analyzed.length).toBe(2)
+      const init = await app.request(`/api/projects/${project.id}/init`, {
+        method: 'POST',
+        headers: hdr,
+        body: JSON.stringify({ presetId: 'tracking' })
+      })
+      expect(init.status).toBe(200)
+      const initJson = (await init.json()) as { project: { status: string } }
+      expect(initJson.project.status).toBe('initialized')
+    }
+
+    const list = await app.request('/api/projects', { headers: hdr })
+    expect(list.status).toBe(200)
+    const listJson = (await list.json()) as { projects: unknown[] }
+    expect(listJson.projects.length).toBe(2)
 
     const me = await app.request('/api/auth/me', { headers: hdr })
     expect(me.status).toBe(200)
   })
 
-  it('github PAT login → import all → import public', async () => {
-    const cloneRoot = mkdtempSync(join(tmpdir(), 'ghclone-'))
-    const pubRepo = join(cloneRoot, 'PublicOne')
-    const privRepo = join(cloneRoot, 'PrivateOne')
-    gitInit(pubRepo)
-    gitInit(privRepo)
-
+  it('github PAT login → oauth start/callback (no catalog import)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
@@ -173,57 +149,6 @@ describe('e2e auth + catalog + analyze', () => {
         if (u.endsWith('/user')) {
           return new Response(
             JSON.stringify({ id: 1, login: 'fr4iser90', name: 'P', avatar_url: '' }),
-          )
-        }
-        if (u.includes('/user/repos')) {
-          return new Response(
-            JSON.stringify([
-              {
-                id: 1,
-                name: 'PrivateOne',
-                full_name: 'fr4iser90/PrivateOne',
-                private: true,
-                html_url: 'https://github.com/fr4iser90/PrivateOne',
-                clone_url: 'https://github.com/fr4iser90/PrivateOne.git',
-                ssh_url: 'git@github.com:fr4iser90/PrivateOne.git',
-                default_branch: 'main',
-                description: null,
-                pushed_at: null,
-                language: null,
-              },
-              {
-                id: 2,
-                name: 'PublicOne',
-                full_name: 'fr4iser90/PublicOne',
-                private: false,
-                html_url: 'https://github.com/fr4iser90/PublicOne',
-                clone_url: 'https://github.com/fr4iser90/PublicOne.git',
-                ssh_url: 'git@github.com:fr4iser90/PublicOne.git',
-                default_branch: 'main',
-                description: null,
-                pushed_at: null,
-                language: null,
-              },
-            ]),
-          )
-        }
-        if (u.includes('/users/fr4iser90/repos')) {
-          return new Response(
-            JSON.stringify([
-              {
-                id: 2,
-                name: 'PublicOne',
-                full_name: 'fr4iser90/PublicOne',
-                private: false,
-                html_url: 'https://github.com/fr4iser90/PublicOne',
-                clone_url: 'https://github.com/fr4iser90/PublicOne.git',
-                ssh_url: 'git@github.com:fr4iser90/PublicOne.git',
-                default_branch: 'main',
-                description: null,
-                pushed_at: null,
-                language: null,
-              },
-            ]),
           )
         }
         if (u.includes('login/oauth/access_token')) {
@@ -235,100 +160,86 @@ describe('e2e auth + catalog + analyze', () => {
 
     const kernel = testKernel()
     kernel.putSettings({
-      setupCompleted: true,
-      executorPaired: true,
-      githubCloneRoot: cloneRoot,
       githubDefaultLogin: 'fr4iser90',
       githubOAuthClientId: 'cid',
       githubOAuthClientSecret: 'sec',
-      githubOAuthRedirectUri: 'http://127.0.0.1:8787/api/auth/github/callback',
+      githubOAuthRedirectUri: 'http://127.0.0.1:8787/api/auth/github/callback'
     })
     const app = createApp(kernel)
 
     const login = await app.request('/api/auth/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: 'github', token: 'ghp_test' }),
+      body: JSON.stringify({ mode: 'github', token: 'ghp_test' })
     })
     expect(login.status).toBe(200)
-    const loginJson = (await login.json()) as { token: string; githubLogin: string; provider: string }
+    const loginJson = (await login.json()) as {
+      token: string
+      githubLogin: string
+      provider: string
+      ownerId: string
+    }
     expect(loginJson.githubLogin).toBe('fr4iser90')
     expect(loginJson.provider).toBe('github')
+    kernel.markExecutorPaired(loginJson.ownerId)
+
     const hdr = { 'content-type': 'application/json', 'x-ak-session': loginJson.token }
-    await app.request('/api/me/executor', {
-      method: 'PUT',
+    const proj = await app.request('/api/projects', {
+      method: 'POST',
       headers: hdr,
       body: JSON.stringify({
-        executorPaired: true,
-      }),
+        name: 'from-gh',
+        path: '/executor/workdir/from-gh',
+        gitRemote: 'https://github.com/fr4iser90/PublicOne.git'
+      })
     })
+    expect(proj.status).toBe(201)
 
-    const all = await app.request('/api/catalog/github/import', {
+    const gone = await app.request('/api/catalog/github/import', {
       method: 'POST',
       headers: hdr,
-      body: JSON.stringify({ visibility: 'all', clone: false, analyze: true }),
+      body: JSON.stringify({ visibility: 'all' })
     })
-    expect(all.status).toBe(200)
-    const allJson = (await all.json()) as { repoCount: number; analyzed: string[] }
-    expect(allJson.repoCount).toBe(2)
-    expect(allJson.analyzed.length).toBeGreaterThanOrEqual(1)
+    expect(gone.status).toBe(404)
 
-    const pub = await app.request('/api/catalog/github/import', {
-      method: 'POST',
-      headers: hdr,
-      body: JSON.stringify({ visibility: 'public', clone: false, analyze: true }),
+    const start = await app.request('/api/auth/github', {
+      redirect: 'manual',
+      headers: { host: '127.0.0.1:8787' }
     })
-    expect(pub.status).toBe(200)
-    const pubJson = (await pub.json()) as { repoCount: number }
-    expect(pubJson.repoCount).toBe(1)
-
-    const start = await app.request('/api/auth/github', { redirect: 'manual' })
     expect([302, 301]).toContain(start.status)
 
-    // oauth callback
     const stateUrl = start.headers.get('location')!
     const state = new URL(stateUrl).searchParams.get('state')!
-    const cb = await app.request(
-      `/api/auth/github/callback?code=abc&state=${state}`,
-      { redirect: 'manual' },
-    )
+    const cb = await app.request(`/api/auth/github/callback?code=abc&state=${state}`, {
+      redirect: 'manual',
+      headers: { host: '127.0.0.1:8787' }
+    })
     expect([302, 301]).toContain(cb.status)
+    expect(cb.headers.get('location')).toMatch(/^http:\/\/127\.0\.0\.1:8787/)
   })
 
   it('assignments fan-out targets + patch + scheduler tick dry', async () => {
     const kernel = testKernel()
-    kernel.putSettings({
-      setupCompleted: true,
-      executorPaired: true,
-    })
     const app = createApp(kernel)
     const reg = await app.request('/api/auth/register', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username: 'e2efan', password: 'secret123' }),
+      body: JSON.stringify({ username: 'e2efan', password: 'secret123' })
     })
-    const { token } = (await reg.json()) as { token: string }
-    await app.request('/api/me/executor', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', 'x-ak-session': token },
-      body: JSON.stringify({
-        executorPaired: true,
-      }),
-    })
+    const { token, ownerId } = (await reg.json()) as { token: string; ownerId: string }
+    kernel.markExecutorPaired(ownerId)
     const hdr = { 'content-type': 'application/json', 'x-ak-session': token }
 
-    const dir = mkdtempSync(join(tmpdir(), 'ak-p-'))
-    gitInit(dir)
     const projRes = await app.request('/api/projects', {
       method: 'POST',
       headers: hdr,
-      body: JSON.stringify({ name: 'p', path: dir }),
+      body: JSON.stringify({ name: 'p', path: '/executor/workdir/fanout-p' })
     })
     const { project } = (await projRes.json()) as { project: { id: string } }
     await app.request(`/api/projects/${project.id}/init`, {
       method: 'POST',
       headers: hdr,
-      body: JSON.stringify({ presetId: 'tracking' }),
+      body: JSON.stringify({ presetId: 'tracking' })
     })
 
     const gas = await app.request('/api/assignments', {
@@ -338,8 +249,8 @@ describe('e2e auth + catalog + analyze', () => {
         profileId: 'docs-only',
         scheduleMode: 'manual',
         reviewMode: 'human',
-        fanOut: { mode: 'all_initialized' },
-      }),
+        fanOut: { mode: 'all_initialized' }
+      })
     })
     expect(gas.status).toBe(201)
     const { assignment } = (await gas.json()) as { assignment: { id: string } }
@@ -351,7 +262,7 @@ describe('e2e auth + catalog + analyze', () => {
     const patch = await app.request(`/api/assignments/${assignment.id}`, {
       method: 'PATCH',
       headers: hdr,
-      body: JSON.stringify({ paused: true }),
+      body: JSON.stringify({ paused: true })
     })
     expect(patch.status).toBe(200)
 

@@ -23,7 +23,7 @@ describe('DshHostClient', () => {
             JSON.stringify({
               type: 'server-response',
               rpcId: '1',
-              result: { ok: true, value: { items: [] } },
+              result: { ok: true, value: { items: [] } }
             }),
           )
           return
@@ -34,7 +34,7 @@ describe('DshHostClient', () => {
             JSON.stringify({
               type: 'server-response',
               rpcId: '1',
-              result: { ok: true, value: { sessionId: 'sess-1' } },
+              result: { ok: true, value: { sessionId: 'sess-1' } }
             }),
           )
           return
@@ -45,7 +45,7 @@ describe('DshHostClient', () => {
             JSON.stringify({
               type: 'server-response',
               rpcId: '1',
-              result: { ok: true, value: {} },
+              result: { ok: true, value: {} }
             }),
           )
           return
@@ -66,12 +66,12 @@ describe('DshHostClient', () => {
                         type: 'user/message',
                         seq: 1,
                         time: 1,
-                        data: { content: [{ type: 'text', text: 'hi' }] },
-                      },
+                        data: { content: [{ type: 'text', text: 'hi' }] }
+                      }
                     },
-                  ],
-                },
-              },
+                  ]
+                }
+              }
             }),
           )
           return
@@ -87,7 +87,7 @@ describe('DshHostClient', () => {
     const host = `127.0.0.1:${port}`
     const client = new DshHostClient({
       endpoint: `http://${host}`,
-      trustedHost: host,
+      trustedHost: host
     })
     await client.ping()
     const { sessionId } = await client.createSession('/tmp')
@@ -111,7 +111,7 @@ describe('DshHostClient', () => {
       reviewMode: 'human',
       initialObjective: 'do it',
       injectMaterialization: 'prompt_inline',
-      rolePromptText: 'ROLE',
+      rolePromptText: 'ROLE'
     } satisfies SessionBrief
     const started = await ex.start(brief)
     expect(started.executorSessionId).toBe('sess-1')
@@ -144,11 +144,11 @@ describe('DshHostClient', () => {
                       running: false,
                       blank: false,
                       cwd: '/tmp',
-                      projections: { asOfSeq: 1, values: { title: 't' } },
+                      projections: { asOfSeq: 1, values: { title: 't' } }
                     },
-                  ],
-                },
-              },
+                  ]
+                }
+              }
             }),
           )
           return
@@ -169,12 +169,12 @@ describe('DshHostClient', () => {
                         type: 'user/message',
                         seq: 1,
                         time: 1,
-                        data: { content: [{ type: 'text', text: 'hello' }] },
-                      },
+                        data: { content: [{ type: 'text', text: 'hello' }] }
+                      }
                     },
-                  ],
-                },
-              },
+                  ]
+                }
+              }
             }),
           )
           return
@@ -206,7 +206,7 @@ describe('DshHostClient', () => {
         JSON.stringify({
           type: 'server-response',
           rpcId: '1',
-          result: { ok: true, value: { items: [] } },
+          result: { ok: true, value: { items: [] } }
         }),
       )
     })
@@ -215,7 +215,7 @@ describe('DshHostClient', () => {
     if (!addr || typeof addr === 'string') throw new Error('no port')
     const client = new DshHostClient({
       endpoint: `http://127.0.0.1:${addr.port}`,
-      trustedHost: 'localhost:13080',
+      trustedHost: 'localhost:13080'
     })
     await client.ping()
     expect(seenHost).toBe('localhost:13080')

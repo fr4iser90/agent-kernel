@@ -24,8 +24,19 @@ export class GitHubClient {
     if (!token?.trim()) throw new Error('GitHub token required')
   }
 
+  private static async githubFetch(url: string, init?: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, init)
+    } catch (e) {
+      const cause = e instanceof Error ? e.message : String(e)
+      throw new Error(
+        `GitHub unreachable from this host (${cause}). API container must allow outbound HTTPS to github.com / api.github.com`,
+      )
+    }
+  }
+
   private async api<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`https://api.github.com${path}`, {
+    const res = await GitHubClient.githubFetch(`https://api.github.com${path}`, {
       ...init,
       headers: {
         Accept: 'application/vnd.github+json',
@@ -90,7 +101,7 @@ export class GitHubClient {
     code: string
     redirectUri: string
   }): Promise<{ access_token: string; token_type: string; scope: string }> {
-    const res = await fetch('https://github.com/login/oauth/access_token', {
+    const res = await GitHubClient.githubFetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: {
         Accept: 'application/json',

@@ -1,102 +1,30 @@
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
-import { execFileSync } from 'node:child_process'
-import type { Project } from '../../domain/catalog/project.js'
-import type { ProjectRepository } from '../../domain/catalog/project-repository.js'
+/**
+ * Catalog helpers — GitHub listing + match against device workdirs.
+ * Project trees live on the executor; kernel never scans or clones product workspaces.
+ */
 import { GitHubClient, type GhRepo } from '../github/github-client.js'
-import { randomUUID } from 'node:crypto'
 
-export function scanLocalGitRoots(root: string): { name: string; path: string; gitRemote: string | null }[] {
-  const abs = resolve(root)
-  if (!existsSync(abs)) throw new Error(`scan path missing: ${abs}`)
-  const skip = new Set([
-    'node_modules',
-    '.git',
-    'dist',
-    'build',
-  ])
-  const out: { name: string; path: string; gitRemote: string | null }[] = []
-  for (const name of readdirSync(abs)) {
-    if (skip.has(name) || name.startsWith('.')) continue
-    if (name.endsWith('.zip') || name.endsWith('.AppImage')) continue
-    const full = join(abs, name)
-    let st
-    try {
-      st = statSync(full)
-    } catch {
-      continue
-    }
-    if (!st.isDirectory()) continue
-    if (!existsSync(join(full, '.git'))) continue
-    let gitRemote: string | null = null
-    try {
-      gitRemote = execFileSync('git', ['-C', full, 'remote', 'get-url', 'origin'], {
-        encoding: 'utf8',
-      }).trim()
-    } catch {
-      gitRemote = null
-    }
-    out.push({ name, path: full, gitRemote })
-  }
-  return out
+export type DeviceWorkdirCandidate = {
+  path: string
+  name: string
+  source: string
+  gitRemote: string | null
 }
 
-export function registerScanResults(
-  projects: ProjectRepository,
-  ownerId: string,
-  found: { name: string; path: string; gitRemote: string | null }[],
-): { registered: Project[]; skipped: { name: string; reason: string }[] } {
-  const existing = projects.listByOwner(ownerId)
-  const byPath = new Map(existing.map((p) => [p.localPath, p]))
-  const registered: Project[] = []
-  const skipped: { name: string; reason: string }[] = []
-  const now = new Date().toISOString()
-  for (const f of found) {
-    if (byPath.has(f.path)) {
-      skipped.push({ name: f.name, reason: 'already_registered' })
-      continue
-    }
-    const p = projects.create({
-      id: randomUUID(),
-      ownerId,
-      name: f.name,
-      localPath: f.path,
-      gitRemote: f.gitRemote,
-      now,
-    })
-    registered.push(p)
-  }
-  return { registered, skipped }
-}
-
-export function cloneGithubRepo(input: {
-  repo: GhRepo
-  cloneRoot: string
-  token: string
-}): string {
-  mkdirSync(input.cloneRoot, { recursive: true })
-  const dest = join(input.cloneRoot, input.repo.name)
-  if (existsSync(join(dest, '.git'))) return dest
-  if (existsSync(dest)) {
-    throw new Error(`clone dest exists but is not a git repo: ${dest}`)
-  }
-  const url = input.repo.clone_url.replace(
-    'https://',
-    `https://x-access-token:${input.token}@`,
-  )
-  execFileSync('git', ['clone', '--depth', '1', url, dest], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-  })
-  // scrub token from remote
-  try {
-    execFileSync('git', ['-C', dest, 'remote', 'set-url', 'origin', input.repo.clone_url], {
-      stdio: 'ignore',
-    })
-  } catch {
-    /* ignore */
-  }
-  return dest
+export type GithubRepoMatch = {
+  id: number
+  name: string
+  fullName: string
+  private: boolean
+  htmlUrl: string
+  cloneUrl: string
+  sshUrl: string
+  defaultBranch: string
+  description: string | null
+  /** on_device = local path matched; missing = GitHub-only (not executor-ready). */
+  match: 'on_device' | 'missing'
+  localPath: string | null
+  matchReason: 'git_remote' | 'basename' | null
 }
 
 export async function fetchGithubReposForImport(
@@ -109,6 +37,72 @@ export async function fetchGithubReposForImport(
     const login = opts.login ?? me.login
     return gh.listPublicRepos(login)
   }
-  // all = owner repos including private
   return gh.listUserRepos({ visibility: 'all', affiliation: 'owner' })
 }
+
+/** Normalize git remotes for equality (https vs ssh, trailing .git). */
+export function normalizeGitRemote(url: string): string {
+  let u = url.trim().toLowerCase()
+  u = u.replace(/\.git$/, '')
+  u = u.replace(/^git\+/, '')
+  u = u.replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/')
+  u = u.replace(/^git@github\.com:/, 'https://github.com/')
+  u = u.replace(/^ssh:\/\/git@([^/]+)\//, 'https://$1/')
+  u = u.replace(/^git@([^:]+):/, 'https://$1/')
+  return u.replace(/\/+$/, '')
+}
+
+function basenameOf(p: string): string {
+  const parts = p.split(/[/\\]/).filter(Boolean)
+  return parts[parts.length - 1] || p
+}
+
+export function matchGithubReposToDevice(
+  repos: GhRepo[],
+  candidates: DeviceWorkdirCandidate[],
+): GithubRepoMatch[] {
+  return repos.map((repo) => {
+    const cloneN = normalizeGitRemote(repo.clone_url)
+    const sshN = normalizeGitRemote(repo.ssh_url)
+    let localPath: string | null = null
+    let matchReason: 'git_remote' | 'basename' | null = null
+
+    for (const c of candidates) {
+      if (c.gitRemote) {
+        const remoteN = normalizeGitRemote(c.gitRemote)
+        if (remoteN === cloneN || remoteN === sshN) {
+          localPath = c.path
+          matchReason = 'git_remote'
+          break
+        }
+      }
+    }
+    if (!localPath) {
+      const want = repo.name.toLowerCase()
+      for (const c of candidates) {
+        if (basenameOf(c.path).toLowerCase() === want || c.name.toLowerCase() === want) {
+          localPath = c.path
+          matchReason = 'basename'
+          break
+        }
+      }
+    }
+
+    return {
+      id: repo.id,
+      name: repo.name,
+      fullName: repo.full_name,
+      private: repo.private,
+      htmlUrl: repo.html_url,
+      cloneUrl: repo.clone_url,
+      sshUrl: repo.ssh_url,
+      defaultBranch: repo.default_branch,
+      description: repo.description,
+      match: localPath ? 'on_device' : 'missing',
+      localPath,
+      matchReason,
+    }
+  })
+}
+
+export type { GhRepo }

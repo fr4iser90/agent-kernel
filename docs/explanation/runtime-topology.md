@@ -10,8 +10,8 @@ Related: [`integrations.md`](integrations.md), [`architecture.md`](architecture.
 
 ```text
 Browser ──HTTPS──▶ Kernel (REST + UI)
-DSH Host plugin (agent-kernel-mcp) ──outbound WSS──▶ Kernel  /api/executor/ws
-DSH Agent ──MCP stdio──▶ Kernel REST   (ak_* tools only)
+Device WSS (DSH plugin or agent-kernel-runner) ──outbound──▶ /api/executor/ws
+DSH Agent / MCP clients ──MCP stdio──▶ Kernel REST   (ak_* tools only)
 ```
 
 | Channel | Direction | Role |
@@ -48,11 +48,15 @@ Env: `WEB_ORIGIN` / public HTTPS host; DSH derives `wss://` from that origin.
 
 ## Setup gaps
 
+### User (every operator)
+
 Per-user `UserExecutorSettings`: `executorId`, `executorPaired`, `operatorLlm`
 (`executor` | `gateway`), optional `gatewayUrl` / `gatewayApiKey` (required when
 `operatorLlm=gateway`).  
 `setupGaps` = missing `executorId` / `executorPaired` only. No `connectMode` /
 `dshEndpoint` / VPN fields.
+
+Order after login: **host** (admin) → **executor pair** → overview.
 
 ### Operator chat LLM
 
@@ -67,6 +71,6 @@ No silent GateWay↔DSH fallback. Wrong/missing config fails loudly.
 
 ## Summary
 
-- **Control plane:** DSH outbound WSS only.  
+- Control plane: outbound WSS only — no project workspace mount on the kernel.
 - **Tools:** MCP → HTTPS.  
 - **Browser:** HTTPS to kernel UI/API.

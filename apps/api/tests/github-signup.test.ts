@@ -8,12 +8,13 @@ import { createApp } from '../src/presentation/app.js'
 
 function testKernel() {
   const db = openSqlite(':memory:')
-  return new Kernel({
+  const k = new Kernel({
     db,
     projects: new SqliteProjectRepository(db),
     settingsRepo: new SqliteSettingsRepository(db),
-    repoRoot: join(process.cwd(), '..', '..'),
+    repoRoot: join(process.cwd(), '..', '..')
   })
+  return k
 }
 
 type Upsert = {
@@ -39,6 +40,21 @@ describe('GitHub signup policy', () => {
     expect(() => upsert(kernel, { id: 2, login: 'bob' })).toThrow(/signup closed/i)
   })
 
+  it('does not auto-link GitHub login to password user by username', () => {
+    const kernel = testKernel()
+    kernel.registerPasswordUser({
+      username: 'alice',
+      password: 'password-long-enough',
+      bootstrap: true
+    })
+    kernel.putSettings({ githubSignupMode: 'open' })
+    // Matching GitHub login must create a distinct account (or fail closed) — never steal alice.
+    const gh = upsert(kernel, { id: 99, login: 'alice' })
+    const pass = kernel.getUserByUsername('alice')!
+    expect(gh.id).not.toBe(pass.id)
+    expect(pass.githubId).toBeNull()
+  })
+
   it('existing GitHub user may always log in when closed', () => {
     const kernel = testKernel()
     upsert(kernel, { id: 1, login: 'alice' })
@@ -60,7 +76,7 @@ describe('GitHub signup policy', () => {
     upsert(kernel, { id: 1, login: 'alice' })
     kernel.putSettings({
       githubSignupMode: 'allowlist',
-      githubSignupAllowlist: ['@Carol', 'dave'],
+      githubSignupAllowlist: ['@Carol', 'dave']
     })
     expect(kernel.settings().githubSignupAllowlist).toEqual(['Carol', 'dave'])
     expect(() => upsert(kernel, { id: 2, login: 'bob' })).toThrow(/allowlist/i)
@@ -74,7 +90,7 @@ describe('GitHub signup policy', () => {
     const reg = await app.request('/api/auth/register', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username: 'admin', password: 'secret123' }),
+      body: JSON.stringify({ username: 'admin', password: 'secret123' })
     })
     const { token } = (await reg.json()) as { token: string }
     const hdr = { 'content-type': 'application/json', 'x-ak-session': token }
@@ -84,8 +100,8 @@ describe('GitHub signup policy', () => {
       headers: hdr,
       body: JSON.stringify({
         githubSignupMode: 'allowlist',
-        githubSignupAllowlist: ['eve'],
-      }),
+        githubSignupAllowlist: ['eve']
+      })
     })
     expect(put.status).toBe(200)
     const body = (await put.json()) as {

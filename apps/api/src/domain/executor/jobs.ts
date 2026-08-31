@@ -1,5 +1,10 @@
 /** Outbound executor job kinds — pushed over WSS; kernel never dials DSH. */
-export type ExecutorJobKind = 'start' | 'nudge' | 'fetch_transcript' | 'operator_turn'
+export type ExecutorJobKind =
+  | 'start'
+  | 'nudge'
+  | 'fetch_transcript'
+  | 'operator_turn'
+  | 'list_workdir_candidates'
 
 
 export type ExecutorJobStatus = 'pending' | 'claimed' | 'completed' | 'failed'

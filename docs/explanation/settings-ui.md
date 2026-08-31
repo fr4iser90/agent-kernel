@@ -40,12 +40,11 @@ No env-only GateWay/DSH as the operator SoT after first save.
 
 | UI control | Settings key |
 |------------|--------------|
-| Workspace root (path, nullable) | `workspaceRoot` |
 | Default executor select | `executorId` (`dsh`, later `claude-code`, `pi`) |
-| DSH invoke mode | `dshInvokeMode` (`cli` \| `host_http`) |
-| DSH Host URL | `dshEndpoint` (shown when `host_http`) |
-| GateWay URL | `gatewayUrl` |
-| GateWay API key ref | `gatewayApiKeyRef` (ref only — **MUST NOT** show raw secret) |
+| GateWay URL (when operatorLlm=gateway) | per-user My Executor `gatewayUrl` |
+| GateWay API key | per-user (masked) |
+
+Product workdirs are registered per project as **executor path** — not a global Settings root.
 
 ### 2 — Law delivery defaults ↔ §2.2
 

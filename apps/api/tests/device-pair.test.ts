@@ -7,12 +7,13 @@ import { SqliteSettingsRepository } from '../src/infrastructure/sqlite/settings-
 
 function testKernel() {
   const db = openSqlite(':memory:')
-  return new Kernel({
+  const k = new Kernel({
     db,
     projects: new SqliteProjectRepository(db),
     settingsRepo: new SqliteSettingsRepository(db),
-    repoRoot: join(process.cwd(), '..', '..'),
+    repoRoot: join(process.cwd(), '..', '..')
   })
+  return k
 }
 
 describe('device pairing', () => {
@@ -21,11 +22,11 @@ describe('device pairing', () => {
     const kernel = testKernel()
     const { token } = kernel.registerPasswordUser({
       username: 'pairer',
-      password: 'password-long-enough',
+      password: 'password-long-enough'
     })
     const info = kernel.sessionInfo(token)!
     const started = kernel.startDevicePair(info.ownerId)
-    expect(started.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
+    expect(started.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/)
     expect(started.kernelUrl).toBe('https://kernel.example')
     expect(kernel.devicePairStatus(info.ownerId, started.code).status).toBe('pending')
 

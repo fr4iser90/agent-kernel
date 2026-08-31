@@ -7,12 +7,13 @@ import { SqliteSettingsRepository } from '../src/infrastructure/sqlite/settings-
 
 function testKernel() {
   const db = openSqlite(':memory:')
-  return new Kernel({
+  const k = new Kernel({
     db,
     projects: new SqliteProjectRepository(db),
     settingsRepo: new SqliteSettingsRepository(db),
-    repoRoot: join(process.cwd(), '..', '..'),
+    repoRoot: join(process.cwd(), '..', '..')
   })
+  return k
 }
 
 describe('operatorLlm settings', () => {
@@ -20,7 +21,7 @@ describe('operatorLlm settings', () => {
     const kernel = testKernel()
     const { token } = kernel.registerPasswordUser({
       username: 'opchat',
-      password: 'password-long-enough',
+      password: 'password-long-enough'
     })
     const ownerId = kernel.sessionInfo(token)!.ownerId
     expect(kernel.getUserExecutorSettings(ownerId).operatorLlm).toBe('executor')
@@ -32,14 +33,14 @@ describe('operatorLlm settings', () => {
     expect(() =>
       kernel.putUserExecutorSettings(ownerId, {
         operatorLlm: 'gateway',
-        gatewayUrl: 'https://gw.example/v1',
+        gatewayUrl: 'https://gw.example/v1'
       }),
     ).toThrow(/gatewayApiKey/)
 
     const saved = kernel.putUserExecutorSettings(ownerId, {
       operatorLlm: 'gateway',
       gatewayUrl: 'https://gw.example/v1',
-      gatewayApiKey: 'sk-test',
+      gatewayApiKey: 'sk-test'
     })
     expect(saved.operatorLlm).toBe('gateway')
     expect(saved.gatewayUrl).toBe('https://gw.example/v1')
@@ -52,12 +53,12 @@ describe('operatorLlm settings', () => {
     const kernel = testKernel()
     const { token } = kernel.registerPasswordUser({
       username: 'badmode',
-      password: 'password-long-enough',
+      password: 'password-long-enough'
     })
     const ownerId = kernel.sessionInfo(token)!.ownerId
     expect(() =>
       kernel.putUserExecutorSettings(ownerId, {
-        operatorLlm: 'silent-fallback' as 'executor',
+        operatorLlm: 'silent-fallback' as 'executor'
       }),
     ).toThrow(/operatorLlm/)
   })
@@ -66,12 +67,13 @@ describe('operatorLlm settings', () => {
     const kernel = testKernel()
     const { token } = kernel.registerPasswordUser({
       username: 'chatfail',
-      password: 'password-long-enough',
+      password: 'password-long-enough'
     })
     const ownerId = kernel.sessionInfo(token)!.ownerId
     await expect(kernel.operatorChat('hi', { ownerId })).rejects.toThrow(/Setup incomplete/)
 
-    kernel.putUserExecutorSettings(ownerId, { executorPaired: true, operatorLlm: 'executor' })
+    kernel.markExecutorPaired(ownerId)
+    kernel.putUserExecutorSettings(ownerId, { operatorLlm: 'executor' })
     await expect(kernel.operatorChat('hi', { ownerId })).rejects.toThrow(/WSS|paired DSH/)
   })
 })

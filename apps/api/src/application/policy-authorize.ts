@@ -1,5 +1,3 @@
-import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
 import type { SessionBrief } from '@agent-kernel/session-brief'
 import type { AgentKernelSettings } from '../domain/settings/settings.js'
 
@@ -9,21 +7,15 @@ export type PolicyDecision =
 
 /**
  * In-process start authorization before ExecutorPort.
- * Git/path guards only when Settings enable them — no silent defaults.
+ * Project workdir lives on the executor — kernel never existsSync's product trees.
  */
 export function authorizeSessionStart(input: {
   brief: SessionBrief
   projectStatus: string
-  projectPathExists: boolean
   settings: Pick<
     AgentKernelSettings,
-    | 'gitPolicyEnabled'
-    | 'protectAssertRunId'
-    | 'protectOwnedPaths'
-    | 'forbidRunIdForkSuffixes'
-    | 'ownedPathsFile'
+    'gitPolicyEnabled' | 'protectAssertRunId' | 'forbidRunIdForkSuffixes' | 'protectOwnedPaths' | 'ownedPathsFile'
   >
-  projectLocalPath: string
 }): PolicyDecision {
   const { brief, settings } = input
 
@@ -34,13 +26,6 @@ export function authorizeSessionStart(input: {
       reason: `project ${brief.projectId} is not initialized — run Init before starting an agent`,
     }
   }
-  if (!input.projectPathExists) {
-    return {
-      allow: false,
-      code: 'path_missing',
-      reason: `project path missing: ${input.projectLocalPath}`,
-    }
-  }
   if (!['human', 'llm_propose', 'llm_auto'].includes(brief.reviewMode)) {
     return {
       allow: false,
@@ -49,7 +34,7 @@ export function authorizeSessionStart(input: {
     }
   }
   if (!brief.workdir?.trim()) {
-    return { allow: false, code: 'workdir_required', reason: 'SessionBrief.workdir required' }
+    return { allow: false, code: 'workdir_required', reason: 'SessionBrief.workdir required (executor path)' }
   }
   if (!brief.executorId?.trim()) {
     return { allow: false, code: 'executor_required', reason: 'SessionBrief.executorId required' }
@@ -74,21 +59,11 @@ export function authorizeSessionStart(input: {
     }
   }
 
-  if (settings.protectOwnedPaths) {
-    if (!settings.ownedPathsFile) {
-      return {
-        allow: false,
-        code: 'owned_paths_unset',
-        reason: 'protectOwnedPaths enabled but ownedPathsFile not set',
-      }
-    }
-    const ownedAbs = resolve(input.projectLocalPath, settings.ownedPathsFile)
-    if (!existsSync(ownedAbs)) {
-      return {
-        allow: false,
-        code: 'owned_paths_missing',
-        reason: `owned paths file missing: ${ownedAbs}`,
-      }
+  if (settings.protectOwnedPaths && !settings.ownedPathsFile?.trim()) {
+    return {
+      allow: false,
+      code: 'owned_paths_unset',
+      reason: 'protectOwnedPaths enabled but ownedPathsFile not set',
     }
   }
 

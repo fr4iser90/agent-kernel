@@ -6,17 +6,18 @@ import { SqliteProjectRepository } from '../src/infrastructure/sqlite/project-re
 import { SqliteSettingsRepository } from '../src/infrastructure/sqlite/settings-repository.js'
 import {
   executorDeviceHub,
-  type ExecutorDeviceSocket,
+  type ExecutorDeviceSocket
 } from '../src/infrastructure/executor/device-hub.js'
 
 function testKernel() {
   const db = openSqlite(':memory:')
-  return new Kernel({
+  const k = new Kernel({
     db,
     projects: new SqliteProjectRepository(db),
     settingsRepo: new SqliteSettingsRepository(db),
-    repoRoot: join(process.cwd(), '..', '..'),
+    repoRoot: join(process.cwd(), '..', '..')
   })
+  return k
 }
 
 function attachMockDevice(ownerId: string): {
@@ -30,7 +31,7 @@ function attachMockDevice(ownerId: string): {
     send: (data) => {
       messages.push(JSON.parse(data) as unknown)
     },
-    close: () => undefined,
+    close: () => undefined
   }
   executorDeviceHub.attach(socket)
   return { socket, messages }
@@ -42,14 +43,14 @@ afterEach(() => {
 })
 
 describe('outbound executor WSS', () => {
-  it('connect-guide is outbound_wss; legacy Host-HTTP fields stripped', async () => {
+  it('connect-guide is outbound_wss; Host-HTTP fields absent', async () => {
     process.env.WEB_ORIGIN = 'https://kernel.example'
     const kernel = testKernel()
     const { createApp } = await import('../src/presentation/app.js')
     const app = createApp(kernel)
     const { token } = kernel.registerPasswordUser({
       username: 'bob',
-      password: 'password-long-enough',
+      password: 'password-long-enough'
     })
     const info = kernel.sessionInfo(token)!
     expect(kernel.setupGapsForUser(info.ownerId)).toContain('executorPaired')
@@ -60,7 +61,7 @@ describe('outbound executor WSS', () => {
     expect(kernel.setupGapsForUser(info.ownerId)).toEqual([])
 
     const res = await app.request('/api/me/executor/connect-guide', {
-      headers: { cookie: `ak_session=${token}` },
+      headers: { cookie: `ak_session=${token}` }
     })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { mode: string; paired: boolean; wssConnected: boolean }
@@ -75,7 +76,7 @@ describe('outbound executor WSS', () => {
     const kernel = testKernel()
     const { token } = kernel.registerPasswordUser({
       username: 'worker',
-      password: 'password-long-enough',
+      password: 'password-long-enough'
     })
     const info = kernel.sessionInfo(token)!
     kernel.claimDevicePair(kernel.startDevicePair(info.ownerId).code)
@@ -116,7 +117,7 @@ describe('outbound executor WSS', () => {
       kernel.markExecutorJobClaimed(info.ownerId, 'job-1')
       const done = kernel.completeExecutorJob(info.ownerId, 'job-1', {
         ok: true,
-        result: { executorSessionId: 'sess-abc' },
+        result: { executorSessionId: 'sess-abc' }
       })
       expect(done.status).toBe('completed')
       const run = kernel.getRun(runId) as { executor_session_id: string; outcome: string }
@@ -133,22 +134,22 @@ describe('outbound executor WSS', () => {
     const kernel = testKernel()
     const { token } = kernel.registerPasswordUser({
       username: 'offline',
-      password: 'password-long-enough',
+      password: 'password-long-enough'
     })
     const info = kernel.sessionInfo(token)!
     kernel.claimDevicePair(kernel.startDevicePair(info.ownerId).code)
-    kernel.putUserExecutorSettings(info.ownerId, { executorId: 'dsh', executorPaired: true })
+    kernel.markExecutorPaired(info.ownerId)
 
     await expect(
-      kernel.nudge('missing-assignment'),
+      kernel.nudge(info.ownerId, 'missing-assignment'),
     ).rejects.toThrow(/not found|No paired DSH|assignment/i)
     delete process.env.WEB_ORIGIN
   })
 
-  it('legacy Host-HTTP JSON normalizes to paired=false without endpoint fields', () => {
+  it('stored Host-HTTP JSON normalizes to paired=false without endpoint fields', () => {
     const kernel = testKernel()
     const { token } = kernel.registerPasswordUser({
-      username: 'legacy',
+      username: 'strip-host-http',
       password: 'password-long-enough',
     })
     const info = kernel.sessionInfo(token)!
@@ -164,7 +165,7 @@ describe('outbound executor WSS', () => {
           dshInvokeMode: 'host_http',
           connectMode: 'vpn',
           dshEndpoint: 'http://100.64.0.1:3080',
-          dshTrustedHost: '100.64.0.1:3080',
+          dshTrustedHost: '100.64.0.1:3080'
         }),
         new Date().toISOString(),
       )

@@ -48,7 +48,7 @@ with DSH, Traefik, and GateWay.
 | **Container runtime** | Optional (L-native or L-docker) | Required |
 | **Public ingress** | Loopback only | Traefik (HTTPS) |
 | **Authentication** | Not required on loopback | Traefik auth (product login/ACL: M6) |
-| **Workspace** | Host filesystem paths | Shared `WORKSPACE_ROOT` volume |
+| **Workspace** | Path on the **executor** (DSH) | Sent in SessionBrief `workdir`; kernel does not mount project trees |
 
 `deploy/` **MUST** provide a **local** Compose profile (image parity) and a
 **remote** profile (Traefik labels, auth). Host `pnpm dev` remains available for
@@ -102,7 +102,7 @@ remote. Ingress: Traefik HTTPS. DSH Host API remains internal-only.
 4. agent-kernel API container  
 5. agent-kernel Web  
 6. Persistent DB volume  
-7. Host `WORKSPACE_ROOT` bind-mounted into kernel **and** DSH  
+7. Executor (DSH) holds project workspaces; kernel is control plane only (no shared `WORKSPACE_ROOT`)
 8. DSH container(s) — internal Host API only; BYO via connect modes  
 9. GateWay — internal URL  
 10. Secrets (GateWay, git, DSH)  
@@ -124,7 +124,7 @@ Server Catalog: **`gitRemote` required** for normal provision; path on workspace
 - Default injection mode / layout / tracking  
 - Git policy flags (default **off**)  
 - Optional analyzer preferences  
-- Server: `workspaceRoot` / volume path alignment with DSH  
+- Server: no shared workspace volume — DSH holds trees; kernel stores project path as executor workdir metadata
 
 ### Out of scope for stack install (operator product setup)
 
@@ -140,7 +140,7 @@ Login, setup wizard / Settings, project Init, assignments, nudges, chat — see 
 |------|--------|--------|
 | 1 | Shell | Clone agent-kernel **or** build/pull `deploy/` images |
 | 2 | Shell | `pnpm install` **or** `docker compose up` |
-| 3 | Shell / Compose env | Secrets: DB, GateWay URL/key refs, DSH endpoint, `WORKSPACE_ROOT` (remote) |
+| 3 | Shell / Compose env | Secrets: DB, OAuth, `WEB_ORIGIN` for device-pair; cookies/CORS from Host + X-Forwarded-Proto (no `WORKSPACE_ROOT`) |
 | 4 | Shell | Start API/Web (+ proxy/DSH as topology requires) |
 | 5 | Shell | Health check (`/health`, ports, Traefik on remote) |
 

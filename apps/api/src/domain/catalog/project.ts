@@ -19,7 +19,7 @@ export interface Project {
 
 export interface RegisterProjectInput {
   name: string
-  /** Absolute path on the control-plane host (OpenAPI: path). */
+  /** Opaque executor workdir path (not inspected by the kernel). */
   localPath: string
   gitRemote?: string | null
 }

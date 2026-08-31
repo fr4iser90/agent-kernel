@@ -2,15 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { authorizeSessionStart } from '../src/application/policy-authorize.js'
 import type { SessionBrief } from '@agent-kernel/session-brief'
 import { DEFAULT_SETTINGS } from '../src/domain/settings/settings.js'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 
 const brief = (over: Partial<SessionBrief> = {}): SessionBrief => ({
   projectId: 'p1',
   assignmentId: 'a1',
   executorId: 'dsh',
-  workdir: '/tmp/x',
+  workdir: '/executor/workdir/x',
   runId: 'agent/x',
   lawpackPin: null,
   injectionMode: 'harness_inject',
@@ -23,7 +20,7 @@ const brief = (over: Partial<SessionBrief> = {}): SessionBrief => ({
   initialObjective: null,
   injectMaterialization: 'none',
   rolePromptText: null,
-  ...over,
+  ...over
 })
 
 describe('policy-authorize', () => {
@@ -31,9 +28,7 @@ describe('policy-authorize', () => {
     const deny = authorizeSessionStart({
       brief: brief(),
       projectStatus: 'registered',
-      projectPathExists: true,
-      projectLocalPath: '/tmp',
-      settings: DEFAULT_SETTINGS,
+      settings: DEFAULT_SETTINGS
     })
     expect(deny.allow).toBe(false)
     if (!deny.allow) expect(deny.code).toBe('project_not_initialized')
@@ -41,43 +36,47 @@ describe('policy-authorize', () => {
     const allow = authorizeSessionStart({
       brief: brief(),
       projectStatus: 'initialized',
-      projectPathExists: true,
-      projectLocalPath: '/tmp',
-      settings: DEFAULT_SETTINGS,
+      settings: DEFAULT_SETTINGS
     })
     expect(allow.allow).toBe(true)
   })
 
-  it('enforces owned paths only when git policy on', () => {
-    const root = join(tmpdir(), `ak-pol-${Date.now()}`)
-    mkdirSync(root, { recursive: true })
-    const off = authorizeSessionStart({
-      brief: brief({ workdir: root }),
+  it('requires ownedPathsFile when protectOwnedPaths and git policy on', () => {
+    const unset = authorizeSessionStart({
+      brief: brief(),
       projectStatus: 'initialized',
-      projectPathExists: true,
-      projectLocalPath: root,
       settings: {
         ...DEFAULT_SETTINGS,
         gitPolicyEnabled: true,
         protectOwnedPaths: true,
-        ownedPathsFile: 'OWNED.md',
-      },
+        ownedPathsFile: null
+      }
     })
-    expect(off.allow).toBe(false)
+    expect(unset.allow).toBe(false)
+    if (!unset.allow) expect(unset.code).toBe('owned_paths_unset')
 
-    writeFileSync(join(root, 'OWNED.md'), 'x\n')
-    const on = authorizeSessionStart({
-      brief: brief({ workdir: root }),
+    const set = authorizeSessionStart({
+      brief: brief(),
       projectStatus: 'initialized',
-      projectPathExists: true,
-      projectLocalPath: root,
       settings: {
         ...DEFAULT_SETTINGS,
         gitPolicyEnabled: true,
         protectOwnedPaths: true,
-        ownedPathsFile: 'OWNED.md',
-      },
+        ownedPathsFile: 'OWNED.md'
+      }
     })
-    expect(on.allow).toBe(true)
+    expect(set.allow).toBe(true)
+
+    const policyOff = authorizeSessionStart({
+      brief: brief(),
+      projectStatus: 'initialized',
+      settings: {
+        ...DEFAULT_SETTINGS,
+        gitPolicyEnabled: false,
+        protectOwnedPaths: true,
+        ownedPathsFile: null
+      }
+    })
+    expect(policyOff.allow).toBe(true)
   })
 })

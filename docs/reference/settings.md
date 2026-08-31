@@ -43,16 +43,23 @@ modules.
 
 ## 2. Setting groups
 
-### 2.1 Workspace and runtime
+### 2.1 Runtime
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `workspaceRoot` | path \| null | `null` | Root for server-mounted workspaces |
 | `executorId` | string | `dsh` | Active `ExecutorPort` adapter identifier |
-| `dshInvokeMode` | `cli` \| `host_http` | `cli` | See [`runtime-topology.md`](../explanation/runtime-topology.md) |
-| `dshEndpoint` | URL \| null | `null` | Host API base URL when not using CLI |
-| `gatewayUrl` | URL \| null | `null` | Model gateway for operator features |
+| `dshInvokeMode` | `cli` \| `host_http` | `host_http` | Unused for BYO outbound WSS (kept null/unused in product path) |
+| `dshEndpoint` | URL \| null | `null` | Unused for BYO outbound WSS |
+| `githubDefaultLogin` | string \| null | `null` | Optional default GitHub login hint for UI |
+| `githubSignupMode` | `closed` \| `open` \| `allowlist` | `closed` | Whether GitHub may create new accounts |
+| `githubSignupAllowlist` | string[] | `[]` | Required when mode is allowlist |
+| `authRequiredForApi` | boolean | `true` | Catalog/runs/executor APIs require a session |
+| `gatewayUrl` | URL \| null | `null` | Global gateway (prefer per-user My Executor) |
 | `gatewayApiKeyRef` | secret reference \| null | `null` | Credential reference; **MUST NOT** appear in Lawpack |
+
+Project workdirs are **not** Settings — per-project `localPath` is an opaque **executor** path in the catalog.
+
+Per-user **My Executor** also stores `detectRoots` (string[]): absolute parent folders on the paired device. Detect lists direct git children over WSS; the kernel never reads that filesystem. Optional device env `AGENT_KERNEL_DETECT_ROOTS` is merged on the device.
 
 ### 2.2 Law delivery defaults
 

@@ -12,19 +12,19 @@ import {
 } from '../infrastructure/executor/device-hub.js'
 
 function tokenFromUpgrade(req: IncomingMessage): string | null {
+  const auth = req.headers.authorization
+  if (auth?.toLowerCase().startsWith('bearer ')) {
+    const t = auth.slice(7).trim()
+    if (t) return t
+  }
+  // Device-pair WSS: DSH uses ?token= (typical WS clients). Bearer preferred when set.
   try {
     const host = req.headers.host ?? 'localhost'
     const u = new URL(req.url ?? '/', `http://${host}`)
-    const q = u.searchParams.get('token')?.trim()
-    if (q) return q
+    return u.searchParams.get('token')?.trim() || null
   } catch {
-    /* ignore */
+    return null
   }
-  const auth = req.headers.authorization
-  if (auth?.toLowerCase().startsWith('bearer ')) {
-    return auth.slice(7).trim() || null
-  }
-  return null
 }
 
 function pathIsExecutorWs(req: IncomingMessage): boolean {
@@ -50,12 +50,13 @@ export function attachExecutorWebSocket(server: HttpServer, kernel: Kernel): Web
       socket.destroy()
       return
     }
-    const ownerId = kernel.ownerFromToken(token)
-    if (!ownerId) {
+    const info = kernel.sessionInfo(token)
+    if (!info || info.provider !== 'device_pair') {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
       socket.destroy()
       return
     }
+    const ownerId = info.ownerId
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req, ownerId)
@@ -81,7 +82,6 @@ export function attachExecutorWebSocket(server: HttpServer, kernel: Kernel): Web
         },
       }
 
-      kernel.markExecutorPaired(ownerId)
       kernel.touchExecutorHeartbeat(ownerId, deviceLabel)
       executorDeviceHub.attach(device)
 

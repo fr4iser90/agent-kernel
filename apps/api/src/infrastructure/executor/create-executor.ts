@@ -10,7 +10,9 @@ import { executorNotImplemented } from './not-implemented.js'
 
 /**
  * Registered executorIds.
- * `dsh` = outbound WSS job channel (paired DSH). No Host-HTTP dial.
+ * Live coding path = outbound WSS jobs on the paired device
+ * (DSH Host plugin or `agent-kernel-runner` for CLI executors).
+ * `createExecutor` stubs stay for contract completeness — kernel does not dial the PC.
  */
 export const EXECUTOR_IDS = [
   'dsh',

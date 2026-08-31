@@ -1,79 +1,56 @@
 # Deploy — agent-kernel Compose
 
-Canonical Docker layout for the control plane. Matches
-[`docs/reference/naming.md`](../docs/reference/naming.md) and
-[`docs/explanation/runtime-topology.md`](../docs/explanation/runtime-topology.md).
+Control plane only (API + Web). The executor (DSH) is a **separate** product —
+pair it over outbound WSS; do not mount it from this folder.
 
 ## Profiles
 
-| File | Topology | Ingress |
-|------|----------|---------|
-| `compose.yml` | **L-docker** (local) | Loopback ports only |
-| `compose.server.yml` | **S** (remote) override | Existing Traefik labels; optional `--profile postgres` |
+| File | When |
+|------|------|
+| `compose.yml` | Local Docker (loopback ports) |
+| `compose.server.yml` | Override on a host that already runs Traefik |
+
+## One env file per machine
+
+| Machine | File | What stays in env |
+|---------|------|-------------------|
+| **Laptop** | `deploy/.env` | Ports, optional `WEB_ORIGIN` for pair, GitHub secrets |
+| **Server** | `deploy/.env.server` | Traefik `WEB_HOST` / `API_HOST`, `WEB_ORIGIN` for pair, GitHub secrets |
+
+**Runtime auto (no env):** Cookie `Secure`, CORS allowlist, OAuth callback redirect — from `Host` + `X-Forwarded-Proto` (what Traefik already sends).
+
+**Still env (cannot detect):** Traefik hostnames in `compose.server.yml`, GitHub client id/secret, public URL for device-pair (DSH has no browser request).
 
 ```bash
-# Local (L-docker) — SQLite on ak-data
-cp deploy/.env.example deploy/.env   # optional; defaults work without
-docker compose -f deploy/compose.yml up --build
+# Local
+cp deploy/.env.example deploy/.env   # optional
+docker compose -f deploy/compose.yml --env-file deploy/.env up --build
 
-# Remote (S) — Traefik attach (DNS A/AAAA for WEB_HOST + API_HOST must exist first)
-cp deploy/.env.server.example deploy/.env.server   # fill secrets
-mkdir -p "${WORKSPACE_ROOT:-/var/lib/agent-kernel/workspaces}"
+# Server (Traefik already running)
+cp deploy/.env.server.example deploy/.env.server   # fill secrets once
 docker compose -f deploy/compose.yml -f deploy/compose.server.yml \
-  --env-file deploy/.env --env-file deploy/.env.server up -d --build
-
-# API runtime uses `node --import tsx` (no Corepack → no npm download at start).
-# After pulling Dockerfile.api changes, always `--build`.
-
-# Required DNS (A/AAAA for WEB_HOST + API_HOST → your Traefik):
-#   kernel.example.com
-#   api.kernel.example.com
-# GitHub OAuth App callback must match GITHUB_REDIRECT_URI.
-
-# Remote + Postgres (ADR-0005)
-# Set DATABASE_URL=postgres://agent:agent@postgres:5432/agent_kernel in .env.server
-docker compose -f deploy/compose.yml -f deploy/compose.server.yml \
-  --env-file deploy/.env --env-file deploy/.env.server --profile postgres up -d --build
+  --env-file deploy/.env.server up -d --build
 ```
 
-Native host still uses `pnpm dev` from the repo root (L-native).
+After `Dockerfile.api` / web changes: always `--build`.
 
-## What is *not* in this folder
+DNS A/AAAA for `WEB_HOST` + `API_HOST` must exist before Traefik can get certs.  
+GitHub OAuth callback must match `GITHUB_REDIRECT_URI`.
 
-| Concern | Where it lives |
-|---------|----------------|
-| Traefik binary / static config | Host / GateWay (or DSH) Compose — **external** |
-| DSH / GateWay | Sibling stacks — wire via **Settings** (UI/API), not deploy `.env` |
-| Auth IdP | Host Traefik middleware / GateWay users |
+Optional Postgres (`--profile postgres`): set `DATABASE_URL` in `.env.server`.
 
-`compose.server.yml` only adds Traefik **Docker labels** + joins the external `proxy` network so an already-running Traefik can discover the API/Web containers.
+## What is *not* here
+
+| Concern | Where |
+|---------|--------|
+| Traefik | Host / GateWay stack |
+| DSH / executor | Separate repo / install — pair via UI |
+| Project workspaces | On the executor only |
+| Auth IdP | Traefik middleware (optional) |
 
 ## Services
 
-| Service | Image build | Default publish |
-|---------|-------------|-----------------|
-| `api` | `Dockerfile.api` | `8787` |
-| `web` | `Dockerfile.web` | `5173` (dev) / `8080` (static) |
-
-Start checks (init/path/optional git policy) run **in-process** in the API before `ExecutorPort` — no sidecar container.
-
-## Local DSH for ExecutorPort
-
-```bash
-cd ~/Documents/Git/deepseek-harness
-docker build -f deploy/Dockerfile -t dsh-web:local .
-mkdir -p /tmp/dsh-ws /tmp/dsh-data
-cp deploy/settings.yaml /tmp/dsh-data/settings.yaml
-cd ~/Documents/Git/agent-kernel
-docker compose -f deploy/compose.dsh-local.yml up -d
-```
-
-Then in agent-kernel Setup wizard:
-
-- `dshEndpoint`: `http://127.0.0.1:13080`
-- `dshTrustedHost`: `127.0.0.1:13080` (must match URL host — use the same host form)
-- Basic auth empty for local
-
-**Host note:** URL host and `dshTrustedHost` must be identical (`127.0.0.1:13080` **or** `localhost:13080`, not mixed). Set DSH `TRUSTED_HOST` to the same value.
-
-Remote Traefik: set endpoint to `https://fr4iser-deepseek.fr4iser.com` and fill basic auth.
+| Service | Image | Role |
+|---------|-------|------|
+| `api` | `Dockerfile.api` | Control plane |
+| `web` | `Dockerfile.web` | UI (+ `/api` proxy) |

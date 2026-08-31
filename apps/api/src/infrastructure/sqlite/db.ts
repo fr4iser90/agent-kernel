@@ -74,6 +74,7 @@ export function openSqlite(dbPath: string): Database.Database {
       token TEXT PRIMARY KEY,
       owner_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      expires_at TEXT,
       provider TEXT NOT NULL DEFAULT 'local',
       github_login TEXT,
       access_token TEXT
@@ -168,6 +169,15 @@ export function openSqlite(dbPath: string): Database.Database {
   if (!sessCols.some((c) => c.name === 'access_token')) {
     db.exec(`ALTER TABLE sessions ADD COLUMN access_token TEXT`)
   }
+  if (!sessCols.some((c) => c.name === 'expires_at')) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN expires_at TEXT`)
+  }
+  // Sessions without expires_at: assign 14d from created_at (fail-closed expiry).
+  db.exec(
+    `UPDATE sessions
+     SET expires_at = datetime(created_at, '+14 days')
+     WHERE expires_at IS NULL OR trim(expires_at) = ''`,
+  )
 
   return db
 }

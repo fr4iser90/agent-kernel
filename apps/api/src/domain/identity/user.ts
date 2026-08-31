@@ -35,6 +35,11 @@ export type UserExecutorSettings = {
   /** Required when operatorLlm=gateway (also optional for llm_propose reviews). */
   gatewayUrl: string | null
   gatewayApiKey: string | null
+  /**
+   * Parent folders on the paired device. Detect lists direct git children.
+   * Opaque executor paths — kernel never reads this filesystem.
+   */
+  detectRoots: string[]
 }
 
 export const DEFAULT_USER_EXECUTOR: UserExecutorSettings = {
@@ -43,6 +48,7 @@ export const DEFAULT_USER_EXECUTOR: UserExecutorSettings = {
   operatorLlm: 'executor',
   gatewayUrl: null,
   gatewayApiKey: null,
+  detectRoots: [],
 }
 
 /** Drop removed Host-HTTP / SSH / connectMode fields from stored JSON. */
@@ -86,11 +92,28 @@ export function normalizeUserExecutorSettings(
     throw new Error(`operatorLlm must be executor|gateway (got ${mode})`)
   }
   merged.operatorLlm = mode
+  const rootsRaw = rest.detectRoots ?? merged.detectRoots
+  const detectRoots: string[] = []
+  if (rootsRaw != null) {
+    if (!Array.isArray(rootsRaw)) {
+      throw new Error('detectRoots must be an array of absolute device paths')
+    }
+    for (const item of rootsRaw) {
+      if (typeof item !== 'string') {
+        throw new Error('detectRoots entries must be strings')
+      }
+      const trimmed = item.trim()
+      if (!trimmed) continue
+      if (detectRoots.includes(trimmed)) continue
+      detectRoots.push(trimmed)
+    }
+  }
   return {
     executorId: merged.executorId,
     executorPaired: merged.executorPaired,
     operatorLlm: merged.operatorLlm,
     gatewayUrl: merged.gatewayUrl ?? null,
     gatewayApiKey: merged.gatewayApiKey ?? null,
+    detectRoots,
   }
 }

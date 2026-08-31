@@ -2,17 +2,28 @@
 
 ## DeepSeek Harness (executor)
 
-- Runs coding loops; typically behind your Traefik / HTTPS edge (auth at edge).
-- Control plane **does not embed** DSH source. It:
-  - sets workdir to the product path,
-  - starts/attaches sessions (**CLI or Host API** — DSH Web UI optional),
-  - injects SessionBrief (RUN_ID, roles, gate, denylist),
-  - records session id + outcome in Orchestration context.
-- VS Code DSH extension remains the human sidecar; remote dashboard uses the
-  same in-process start policy before ExecutorPort.
+- Runs coding loops on the **operator’s machine** via outbound WSS
+  (`agent-kernel-mcp` Host plugin → `/api/executor/ws`).
+- Control plane never dials the PC. It enqueues `start` / `nudge` /
+  `fetch_transcript` / `operator_turn` jobs; the device executes them.
+- Pairing: one-time code in DSH Session Header → `connect.json`.
 
-**Local-first → Docker server, volumes, git workspaces:** see
-[`runtime-topology.md`](runtime-topology.md).
+**Local-first → Docker server:** see [`runtime-topology.md`](runtime-topology.md).
+
+## Claude Code / Aider / OpenCode
+
+Same WSS job channel. Device-side `agent-kernel-mcp` (or standalone
+`agent-kernel-runner`) routes by `brief.executorId`:
+
+| `executorId` | Device command |
+|--------------|----------------|
+| `claude-code` | `claude --print …` |
+| `aider` | `aider --message … --yes-always` |
+| `opencode` | `opencode run --auto …` |
+
+CLI must be on PATH (override with `AGENT_KERNEL_CLAUDE_BIN` /
+`AGENT_KERNEL_AIDER_BIN` / `AGENT_KERNEL_OPENCODE_BIN`). Operator chat with
+MCP tools still needs DSH preset `operator`, or set `operatorLlm=gateway`.
 
 ## Optional OpenAI-compatible GateWay (models)
 
@@ -60,9 +71,10 @@ See [`ui.md`](ui.md) § “Two different chats” and
 
 ## Git hosts
 
-- **Local:** path + existing checkout first; `gitRemote` optional metadata.
-- **Server (Docker):** provision is **git-first** — clone/fetch into a shared
-  workspace volume both kernel and DSH mount (see
-  [`runtime-topology.md`](runtime-topology.md)).
-- Remotes: GitHub/`gh` optional helpers; branch policy stays in lawpack +
+- **BYO executor workspaces:** product trees live on the user's executor (DSH).
+  Kernel registers an **opaque path** string (whatever the executor understands)
+  — it never scans host FS, clones into a shared volume, or `existsSync`s
+  workdirs. See [`runtime-topology.md`](runtime-topology.md).
+- `gitRemote` is optional catalog metadata only.
+- Remotes: GitHub OAuth/PAT for **identity**; branch policy stays in lawpack +
   control plane Profiles (mirrors LAWS).

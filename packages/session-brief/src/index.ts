@@ -8,9 +8,9 @@ export type SessionBrief = {
   projectId: string
   assignmentId: string
   executorId: string
-  /** Host filesystem path (Init / inject / policy). */
+  /** Executor workdir path (opaque to kernel). */
   workdir: string
-  /** Path passed to executor session.create (may be container-mapped). Defaults to workdir. */
+  /** Path passed to executor session.create. Defaults to workdir. */
   executorCwd?: string | null
   runId: string
   lawpackPin: string | null

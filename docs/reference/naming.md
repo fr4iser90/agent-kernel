@@ -58,7 +58,7 @@ deploy/
 | Put here | Put elsewhere |
 |----------|----------------|
 | How to run the control plane in Docker | `apps/*` source |
-| Volume / `WORKSPACE_ROOT` notes | Host data dirs (never commit workspace clones) |
+| Volume notes | Kernel: `ak-data` only. Project trees: on executor (DSH), never a kernel `WORKSPACE_ROOT` |
 | Server attach to existing `proxy` network | DSH image itself (stays in deepseek-harness `deploy/`) |
 
 Root-level `compose.yml` symlink to `deploy/compose.yml` is optional convenience

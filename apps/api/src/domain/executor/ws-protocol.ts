@@ -13,7 +13,7 @@ export type ServerToDeviceMessage =
       type: 'job.created'
       jobId: string
       runId: string
-      kind: 'start' | 'nudge' | 'fetch_transcript' | 'operator_turn'
+      kind: 'start' | 'nudge' | 'fetch_transcript' | 'operator_turn' | 'list_workdir_candidates'
       payload: Record<string, unknown>
       createdAt: string
     }

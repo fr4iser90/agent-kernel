@@ -5,7 +5,6 @@ import { openSqlite } from '../src/infrastructure/sqlite/db.js'
 import { SqliteProjectRepository } from '../src/infrastructure/sqlite/project-repository.js'
 import { SqliteSettingsRepository } from '../src/infrastructure/sqlite/settings-repository.js'
 import { createApp } from '../src/presentation/app.js'
-import { deploymentPresets } from '../src/domain/settings/settings.js'
 
 function testKernel() {
   const db = openSqlite(':memory:')
@@ -17,22 +16,25 @@ function testKernel() {
   })
 }
 
-describe('deployment mode (no kit)', () => {
-  it('presets: personal vs hosted/hybrid', () => {
-    expect(deploymentPresets('personal')).toEqual({ authRequiredForApi: false })
-    expect(deploymentPresets('hosted')).toEqual({ authRequiredForApi: true })
-    expect(deploymentPresets('hybrid')).toEqual({ authRequiredForApi: true })
+describe('host policy', () => {
+  it('authRequiredForApi defaults true', () => {
+    const kernel = testKernel()
+    expect(kernel.settings().authRequiredForApi).toBe(true)
   })
 
-  it('public config; admin toggles mode; no kit routes; operator blocked', async () => {
+  it('public config; admin may toggle authRequiredForApi; operator blocked', async () => {
     const kernel = testKernel()
     const app = createApp(kernel)
-    expect(kernel.settings().deploymentMode).toBe('hybrid')
 
     const pub = await app.request('/api/public/config')
     expect(pub.status).toBe(200)
-    const pubJson = (await pub.json()) as { deploymentMode: string; selfHostHint?: string }
-    expect(pubJson.deploymentMode).toBe('hybrid')
+    const pubJson = (await pub.json()) as {
+      authRequiredForApi: boolean
+      allowBootstrapRegister: boolean
+      selfHostHint?: string
+    }
+    expect(pubJson.authRequiredForApi).toBe(true)
+    expect(pubJson.allowBootstrapRegister).toBe(true)
     expect(pubJson.selfHostHint).toMatch(/compose/i)
 
     expect((await app.request('/api/kit/download')).status).toBe(404)
@@ -45,15 +47,13 @@ describe('deployment mode (no kit)', () => {
     const { token } = (await reg.json()) as { token: string }
     const hdr = { 'content-type': 'application/json', 'x-ak-session': token }
 
-    const personal = await app.request('/api/admin/deployment', {
+    const off = await app.request('/api/admin/deployment', {
       method: 'PUT',
       headers: hdr,
-      body: JSON.stringify({ deploymentMode: 'personal' }),
+      body: JSON.stringify({ authRequiredForApi: false }),
     })
-    expect(personal.status).toBe(200)
-    expect(((await personal.json()) as { authRequiredForApi: boolean }).authRequiredForApi).toBe(
-      false,
-    )
+    expect(off.status).toBe(200)
+    expect(((await off.json()) as { authRequiredForApi: boolean }).authRequiredForApi).toBe(false)
 
     const now = new Date().toISOString()
     const opId = 'op-user-1'
@@ -71,7 +71,7 @@ describe('deployment mode (no kit)', () => {
     const opPut = await app.request('/api/admin/deployment', {
       method: 'PUT',
       headers: { 'content-type': 'application/json', 'x-ak-session': opTok },
-      body: JSON.stringify({ deploymentMode: 'hybrid' }),
+      body: JSON.stringify({ authRequiredForApi: true }),
     })
     expect(opPut.status).toBe(401)
   })

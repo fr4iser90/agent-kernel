@@ -1,13 +1,17 @@
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
 import { getCookie, setCookie } from 'hono/cookie'
-import { resolve } from 'node:path'
 import { z } from 'zod'
 import type { Kernel } from '../application/kernel.js'
+import {
+  corsAllowOrigin,
+  publicOriginFromRequest,
+  requestIsHttps,
+} from './request-site.js'
 
 const SESSION_COOKIE = 'ak_session'
 
-function sessionCookieOpts(maxAge?: number) {
+function sessionCookieOpts(c: Context, maxAge?: number) {
   const opts: {
     httpOnly: true
     path: string
@@ -18,7 +22,8 @@ function sessionCookieOpts(maxAge?: number) {
     httpOnly: true,
     path: '/',
     sameSite: 'Lax',
-    secure: process.env.COOKIE_SECURE === '1',
+    // Secure when the browser reached us via HTTPS (Traefik terminates TLS).
+    secure: requestIsHttps(c),
   }
   if (maxAge !== undefined) opts.maxAge = maxAge
   return opts
@@ -40,7 +45,9 @@ function authed(kernel: Kernel, c: Context): string {
 
 function requireAdmin(kernel: Kernel, c: Context): string {
   const info = kernel.sessionInfo(sessionToken(c))
-  if (!info || info.role !== 'admin') throw new Error('unauthorized')
+  if (!info || info.role !== 'admin' || info.provider === 'device_pair') {
+    throw new Error('unauthorized')
+  }
   return info.ownerId
 }
 
@@ -49,20 +56,43 @@ function requireApiAuth(kernel: Kernel, c: Context): string {
   return authed(kernel, c)
 }
 
+
+/** Simple in-memory login throttle (per username / IP key). */
+const loginFailures = new Map<string, { count: number; until: number }>()
+
+function loginThrottleKey(c: Context, username?: string): string {
+  const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'local'
+  return `${ip}:${(username ?? '').toLowerCase()}`
+}
+
+function assertLoginAllowed(key: string): void {
+  const row = loginFailures.get(key)
+  if (row && row.until > Date.now() && row.count >= 8) {
+    throw new Error('too many login attempts — try again later')
+  }
+}
+
+function recordLoginFailure(key: string): void {
+  const now = Date.now()
+  const row = loginFailures.get(key)
+  const fresh = !row || now - row.until > 60_000
+  const count = fresh ? 1 : row.count + 1
+  loginFailures.set(key, {
+    count,
+    until: count >= 8 ? now + 15 * 60_000 : now,
+  })
+}
+
+function clearLoginFailures(key: string): void {
+  loginFailures.delete(key)
+}
+
 export function createApp(kernel: Kernel): Hono {
   const app = new Hono()
   app.use(
     '*',
     cors({
-      origin: (origin) => {
-        const allowed = [
-          'http://localhost:5173',
-          'http://127.0.0.1:5173',
-          process.env.WEB_ORIGIN,
-        ].filter(Boolean) as string[]
-        if (!origin) return allowed[0] ?? '*'
-        return allowed.includes(origin) ? origin : allowed[0] ?? origin
-      },
+      origin: (origin, c) => corsAllowOrigin(origin, c),
       credentials: true,
     }),
   )
@@ -95,7 +125,7 @@ export function createApp(kernel: Kernel): Hono {
       password: body.password,
       bootstrap: true,
     })
-    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts())
+    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts(c))
     return c.json(result, 201)
   })
 
@@ -117,30 +147,54 @@ export function createApp(kernel: Kernel): Hono {
       provider: string
       setupRequired: boolean
       setupGaps: string[]
+      executorSetupRequired: boolean
+      nextSetup: 'executor' | null
+      nextPath: string
     }
     if (mode === 'password') {
       if (!body.username || !body.password) {
         return c.json({ error: 'username and password required' }, 400)
       }
-      result = kernel.loginPassword(body.username, body.password)
+      const key = loginThrottleKey(c, body.username)
+      assertLoginAllowed(key)
+      try {
+        result = kernel.loginPassword(body.username, body.password)
+        clearLoginFailures(key)
+      } catch (e) {
+        recordLoginFailure(key)
+        throw e
+      }
     } else if (mode === 'github' || mode === 'github-pat') {
       const pat = body.token ?? body.pat
       if (!pat?.trim()) return c.json({ error: 'GitHub token/pat required' }, 400)
-      result = await kernel.loginGithubPat(pat.trim())
+      const key = loginThrottleKey(c, 'github')
+      assertLoginAllowed(key)
+      try {
+        result = await kernel.loginGithubPat(pat.trim())
+        clearLoginFailures(key)
+      } catch (e) {
+        recordLoginFailure(key)
+        throw e
+      }
     } else {
       return c.json({ error: `unknown login mode: ${mode} (use password or github)` }, 400)
     }
-    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts())
+    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts(c))
     return c.json(result)
   })
 
   app.post('/api/auth/logout', (c) => {
-    setCookie(c, SESSION_COOKIE, '', sessionCookieOpts(0))
+    const token = sessionToken(c)
+    if (token) kernel.revokeSession(token)
+    setCookie(c, SESSION_COOKIE, '', sessionCookieOpts(c, 0))
     return c.json({ ok: true })
   })
 
   app.get('/api/auth/github', (c) => {
-    const { url } = kernel.githubOAuthStartUrl()
+    const site = publicOriginFromRequest(c)
+    const redirect =
+      process.env.GITHUB_REDIRECT_URI?.trim() || `${site}/api/auth/github/callback`
+    const { url } = kernel.githubOAuthStartUrl(redirect)
     return c.redirect(url, 302)
   })
 
@@ -149,17 +203,16 @@ export function createApp(kernel: Kernel): Hono {
     const state = c.req.query('state')
     if (!code || !state) return c.json({ error: 'missing code/state' }, 400)
     const result = await kernel.loginGithubOAuthCode(code, state)
-    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts())
-    // Cookie must be set on the WEB host (nginx → api). Callback URL must be
-    // https://<WEB_HOST>/api/auth/github/callback — not the bare API host.
-    const web = process.env.WEB_ORIGIN ?? 'http://127.0.0.1:5173'
-    const dest = result.setupRequired ? '/setup' : '/overview'
-    return c.redirect(`${web}${dest}`, 302)
+    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts(c))
+    // Same host the browser used (via Traefik/nginx) — not a separate env origin.
+    const site = publicOriginFromRequest(c)
+    return c.redirect(`${site}${result.nextPath}`, 302)
   })
 
   app.get('/api/auth/me', (c) => {
     const info = kernel.sessionInfo(sessionToken(c))
     if (!info) throw new Error('unauthorized')
+    const nextSetup = kernel.nextSetupStep(info.ownerId)
     return c.json({
       ownerId: info.ownerId,
       username: info.username,
@@ -167,6 +220,9 @@ export function createApp(kernel: Kernel): Hono {
       provider: info.provider,
       githubLogin: info.githubLogin,
       setupGaps: kernel.setupGapsForUser(info.ownerId),
+      executorSetupRequired: nextSetup === 'executor',
+      nextSetup,
+      nextPath: kernel.nextSetupPath(info.ownerId),
       auth: kernel.authPublicConfig(),
     })
   })
@@ -209,9 +265,11 @@ export function createApp(kernel: Kernel): Hono {
     return c.json(kernel.claimDevicePair(body.code))
   })
 
-  /** Optional REST complete — prefer WSS job.completed. Kept for debugging only if needed. */
+  /** Optional REST complete — device_pair session only (same trust as WSS). */
   app.post('/api/executor/jobs/:id/complete', async (c) => {
-    const owner = requireApiAuth(kernel, c)
+    const info = kernel.sessionInfo(sessionToken(c))
+    if (!info || info.provider !== 'device_pair') throw new Error('unauthorized')
+    const owner = info.ownerId
     const body = (await c.req.json()) as {
       ok?: boolean
       result?: Record<string, unknown>
@@ -265,42 +323,36 @@ export function createApp(kernel: Kernel): Hono {
       body.githubOAuthClientSecret = cur.githubOAuthClientSecret
     }
     const saved = kernel.putSettings(body as never)
-    return c.json(saved)
+    const { dshBasicAuthPassword, gatewayApiKey, githubOAuthClientSecret, ...safe } = saved
+    return c.json({
+      ...safe,
+      dshBasicAuthPassword: dshBasicAuthPassword ? '***' : null,
+      gatewayApiKey: gatewayApiKey ? '***' : null,
+      githubOAuthClientSecret: githubOAuthClientSecret ? '***' : null,
+      setupGaps: kernel.setupGaps(),
+    })
   })
 
   app.get('/api/admin/deployment', (c) => {
     requireAdmin(kernel, c)
     const s = kernel.settings()
     return c.json({
-      deploymentMode: s.deploymentMode,
       authRequiredForApi: s.authRequiredForApi,
-      allowBootstrapRegister: s.allowBootstrapRegister,
       githubSignupMode: s.githubSignupMode,
       githubSignupAllowlist: s.githubSignupAllowlist,
-      presets: {
-        personal: { authRequiredForApi: false },
-        hosted: { authRequiredForApi: true },
-        hybrid: { authRequiredForApi: true },
-      },
     })
   })
 
   app.put('/api/admin/deployment', async (c) => {
     requireAdmin(kernel, c)
     const body = (await c.req.json()) as {
-      deploymentMode?: 'personal' | 'hosted' | 'hybrid'
       authRequiredForApi?: boolean
-      allowBootstrapRegister?: boolean
       githubSignupMode?: 'closed' | 'open' | 'allowlist'
       githubSignupAllowlist?: string[]
     }
     const saved = kernel.putSettings({
-      ...(body.deploymentMode ? { deploymentMode: body.deploymentMode } : {}),
       ...(body.authRequiredForApi !== undefined
         ? { authRequiredForApi: body.authRequiredForApi }
-        : {}),
-      ...(body.allowBootstrapRegister !== undefined
-        ? { allowBootstrapRegister: body.allowBootstrapRegister }
         : {}),
       ...(body.githubSignupMode !== undefined
         ? { githubSignupMode: body.githubSignupMode }
@@ -310,9 +362,7 @@ export function createApp(kernel: Kernel): Hono {
         : {}),
     })
     return c.json({
-      deploymentMode: saved.deploymentMode,
       authRequiredForApi: saved.authRequiredForApi,
-      allowBootstrapRegister: saved.allowBootstrapRegister,
       githubSignupMode: saved.githubSignupMode,
       githubSignupAllowlist: saved.githubSignupAllowlist,
     })
@@ -336,76 +386,43 @@ export function createApp(kernel: Kernel): Hono {
     return c.json({ project }, 201)
   })
 
+  /** Ask paired device for workdir candidates (WSS job — no kernel FS scan). */
+  app.post('/api/projects/detect', async (c) => {
+    const owner = authed(kernel, c)
+    return c.json(await kernel.detectWorkdirCandidates(owner))
+  })
+
+  /**
+   * GitHub repos + device match (WSS detect).
+   * GitHub alone is never executor-ready — match must find a local path.
+   */
+  app.post('/api/projects/github-match', async (c) => {
+    const owner = authed(kernel, c)
+    return c.json(await kernel.listGithubReposWithDeviceMatch(owner))
+  })
+
   app.get('/api/projects/:projectId', (c) => {
-    authed(kernel, c)
-    const project = kernel.getProject(c.req.param('projectId'))
+    const owner = authed(kernel, c)
+    const project = kernel.getProject(owner, c.req.param('projectId'))
     if (!project) return c.json({ error: 'not found' }, 404)
     return c.json({ project })
   })
 
-  app.post('/api/projects/:projectId/sniff', (c) => {
-    authed(kernel, c)
-    return c.json({ project: kernel.sniff(c.req.param('projectId')) })
-  })
-
-  app.post('/api/projects/:projectId/analyze', (c) => {
-    authed(kernel, c)
-    return c.json({ project: kernel.analyze(c.req.param('projectId')) })
-  })
-
-  app.post('/api/catalog/scan-local', async (c) => {
-    const owner = authed(kernel, c)
-    const body = (await c.req.json()) as { path?: string; analyze?: boolean }
-    const path = body.path ?? '/home/fr4iser/Documents/Git'
-    const result = kernel.scanLocalProjects(owner, path)
-    const all = kernel.listProjects(owner).filter((p) => p.localPath.startsWith(resolve(path)))
-    const analyzedAll =
-      body.analyze === false ? [] : all.map((p) => kernel.analyze(p.id))
-    return c.json({
-      registered: result.registered.map((p) => ({ id: p.id, name: p.name, path: p.localPath })),
-      skipped: result.skipped,
-      analyzed: analyzedAll.map((p) => ({ id: p.id, name: p.name, advice: p.meta.advice })),
-    })
-  })
-
-  app.post('/api/catalog/github/import', async (c) => {
-    const token =
-      getCookie(c, SESSION_COOKIE) ??
-      c.req.header('x-ak-session') ??
-      c.req.header('authorization')?.replace(/^Bearer\s+/i, '')
-    authed(kernel, c)
-    const body = (await c.req.json()) as {
-      visibility?: 'all' | 'public'
-      login?: string
-      clone?: boolean
-      analyze?: boolean
-      maxRepos?: number
-    }
-    const result = await kernel.importGithubProjects(token!, {
-      visibility: body.visibility ?? 'all',
-      login: body.login,
-      clone: body.clone,
-      analyze: body.analyze,
-      maxRepos: body.maxRepos,
-    })
-    return c.json(result)
-  })
-
   app.post('/api/projects/:projectId/init/preview', async (c) => {
-    authed(kernel, c)
+    const owner = authed(kernel, c)
     const body = await c.req.json().catch(() => ({}))
-    return c.json(kernel.initPreview(c.req.param('projectId'), body))
+    return c.json(kernel.initPreview(owner, c.req.param('projectId'), body))
   })
 
   app.post('/api/projects/:projectId/init', async (c) => {
-    authed(kernel, c)
+    const owner = authed(kernel, c)
     const body = await c.req.json().catch(() => ({}))
-    return c.json({ project: kernel.initApply(c.req.param('projectId'), body) })
+    return c.json({ project: kernel.initApply(owner, c.req.param('projectId'), body) })
   })
 
   app.get('/api/projects/:projectId/assignments', (c) => {
-    authed(kernel, c)
-    return c.json({ assignments: kernel.listAssignments(c.req.param('projectId')) })
+    const owner = authed(kernel, c)
+    return c.json({ assignments: kernel.listAssignments(owner, c.req.param('projectId')) })
   })
 
   app.post('/api/projects/:projectId/assignments', async (c) => {
@@ -444,55 +461,55 @@ export function createApp(kernel: Kernel): Hono {
   })
 
   app.get('/api/assignments', (c) => {
-    authed(kernel, c)
+    const owner = authed(kernel, c)
     const projectId = c.req.query('projectId')
     if (projectId === undefined) {
       return c.json({
-        project: kernel.listAssignments(null),
+        project: kernel.listAssignments(owner, null),
         note: 'pass projectId= for scoped; this lists globals only',
       })
     }
     if (projectId === '' || projectId === 'null') {
-      return c.json({ assignments: kernel.listAssignments(null) })
+      return c.json({ assignments: kernel.listAssignments(owner, null) })
     }
-    return c.json({ assignments: kernel.listAssignments(projectId) })
+    return c.json({ assignments: kernel.listAssignments(owner, projectId) })
   })
 
   app.patch('/api/assignments/:assignmentId', async (c) => {
-    authed(kernel, c)
+    const owner = authed(kernel, c)
     const body = await c.req.json()
     return c.json({
-      assignment: kernel.patchAssignment(c.req.param('assignmentId'), body),
+      assignment: kernel.patchAssignment(owner, c.req.param('assignmentId'), body),
     })
   })
 
   app.delete('/api/assignments/:assignmentId', (c) => {
-    authed(kernel, c)
-    return c.json(kernel.deleteAssignment(c.req.param('assignmentId')))
+    const owner = authed(kernel, c)
+    return c.json(kernel.deleteAssignment(owner, c.req.param('assignmentId')))
   })
 
   app.get('/api/assignments/:assignmentId/targets', (c) => {
-    authed(kernel, c)
-    return c.json(kernel.resolveFanOutTargets(c.req.param('assignmentId')))
+    const owner = authed(kernel, c)
+    return c.json(kernel.resolveFanOutTargets(owner, c.req.param('assignmentId')))
   })
 
   app.post('/api/assignments/:assignmentId/brief', (c) => {
-    authed(kernel, c)
+    const owner = authed(kernel, c)
     const projectId = c.req.query('projectId')
     return c.json({
-      brief: kernel.buildBrief(c.req.param('assignmentId'), projectId || undefined),
+      brief: kernel.buildBrief(owner, c.req.param('assignmentId'), projectId || undefined),
     })
   })
 
   app.post('/api/assignments/:assignmentId/nudge', async (c) => {
-    authed(kernel, c)
+    const owner = authed(kernel, c)
     const body = await c.req.json().catch(() => ({}))
-    const run = await kernel.nudge(c.req.param('assignmentId'), (body as { text?: string }).text)
+    const run = await kernel.nudge(owner, c.req.param('assignmentId'), (body as { text?: string }).text)
     return c.json({ run }, 201)
   })
 
   app.post('/api/scheduler/tick', async (c) => {
-    authed(kernel, c)
+    requireAdmin(kernel, c)
     return c.json(await kernel.schedulerTick())
   })
 
@@ -506,7 +523,7 @@ export function createApp(kernel: Kernel): Hono {
   })
 
   app.post('/api/profiles', async (c) => {
-    authed(kernel, c)
+    requireAdmin(kernel, c)
     const body = await c.req.json()
     const profile = kernel.createProfile({
       id: String(body.id),
@@ -521,7 +538,7 @@ export function createApp(kernel: Kernel): Hono {
   })
 
   app.patch('/api/profiles/:profileId', async (c) => {
-    authed(kernel, c)
+    requireAdmin(kernel, c)
     const body = await c.req.json()
     const profile = kernel.updateProfile(c.req.param('profileId'), {
       label: body.label,
@@ -540,20 +557,23 @@ export function createApp(kernel: Kernel): Hono {
   })
 
   app.delete('/api/profiles/:profileId', (c) => {
-    authed(kernel, c)
+    requireAdmin(kernel, c)
     return c.json(kernel.deleteProfile(c.req.param('profileId')))
   })
 
   app.get('/api/runs', (c) => {
-    authed(kernel, c)
-    return c.json({ runs: kernel.listRuns(c.req.query('projectId')) })
+    const owner = authed(kernel, c)
+    return c.json({ runs: kernel.listRuns(owner, c.req.query('projectId')) })
   })
 
   app.get('/api/runs/:runId', (c) => {
-    authed(kernel, c)
-    const run = kernel.getRun(c.req.param('runId'))
-    if (!run) return c.json({ error: 'not found' }, 404)
-    return c.json({ run })
+    const owner = authed(kernel, c)
+    try {
+      const run = kernel.requireRun(c.req.param('runId'), owner)
+      return c.json({ run })
+    } catch {
+      return c.json({ error: 'not found' }, 404)
+    }
   })
 
   app.post('/api/runs/:runId/approve', async (c) => {
@@ -563,9 +583,9 @@ export function createApp(kernel: Kernel): Hono {
   })
 
   app.post('/api/runs/:runId/reject', async (c) => {
-    authed(kernel, c)
+    const owner = authed(kernel, c)
     const body = (await c.req.json().catch(() => ({}))) as { reason?: string }
-    return c.json({ run: kernel.rejectRun(c.req.param('runId'), body.reason) })
+    return c.json({ run: kernel.rejectRun(owner, c.req.param('runId'), body.reason) })
   })
 
   app.get('/api/runs/:runId/transcript', async (c) => {

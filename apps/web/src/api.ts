@@ -22,34 +22,39 @@ export type PublicConfig = {
   githubOAuthConfigured: boolean
   githubSignupMode: 'closed' | 'open' | 'allowlist'
   userCount: number
-  deploymentMode: 'personal' | 'hosted' | 'hybrid'
   authRequiredForApi: boolean
   loginOptional: boolean
   lawpackVersion?: string | null
   selfHostHint?: string
 }
 
+export type AuthResult = {
+  token: string
+  setupRequired: boolean
+  setupGaps: string[]
+  executorSetupRequired: boolean
+  nextSetup: 'executor' | null
+  nextPath: '/setup' | '/overview'
+  role?: string | null
+  githubLogin?: string
+  provider?: string
+}
+
 export const api = {
   authConfig: () => req<PublicConfig>('/api/auth/config'),
   publicConfig: () => req<PublicConfig>('/api/public/config'),
   register: (username: string, password: string) =>
-    req<{ token: string; setupRequired: boolean; setupGaps: string[] }>('/api/auth/register', {
+    req<AuthResult>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
   loginPassword: (username: string, password: string) =>
-    req<{ token: string; setupRequired: boolean; setupGaps: string[] }>('/api/auth/login', {
+    req<AuthResult>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ mode: 'password', username, password }),
     }),
   loginGithubPat: (pat: string) =>
-    req<{
-      token: string
-      setupRequired: boolean
-      setupGaps: string[]
-      githubLogin: string
-      provider: string
-    }>('/api/auth/login', {
+    req<AuthResult>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ mode: 'github', token: pat }),
     }),
@@ -61,6 +66,9 @@ export const api = {
       username?: string | null
       role?: string | null
       setupGaps: string[]
+      executorSetupRequired: boolean
+      nextSetup: 'executor' | null
+      nextPath: string
       provider?: string
       githubLogin?: string | null
       auth?: PublicConfig
@@ -96,17 +104,12 @@ export const api = {
     req('/api/settings', { method: 'PUT', body: JSON.stringify(body) }),
   getDeployment: () =>
     req<{
-      deploymentMode: PublicConfig['deploymentMode']
       authRequiredForApi: boolean
-      allowBootstrapRegister: boolean
       githubSignupMode: PublicConfig['githubSignupMode']
       githubSignupAllowlist: string[]
-      presets: Record<string, { authRequiredForApi: boolean }>
     }>('/api/admin/deployment'),
   putDeployment: (body: {
-    deploymentMode?: PublicConfig['deploymentMode']
     authRequiredForApi?: boolean
-    allowBootstrapRegister?: boolean
     githubSignupMode?: PublicConfig['githubSignupMode']
     githubSignupAllowlist?: string[]
   }) => req('/api/admin/deployment', { method: 'PUT', body: JSON.stringify(body) }),
@@ -114,6 +117,27 @@ export const api = {
   projects: () => req<{ projects: Project[] }>('/api/projects'),
   registerProject: (body: { name: string; path: string; gitRemote?: string }) =>
     req<{ project: Project }>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
+  detectProjects: () =>
+    req<{
+      candidates: Array<{ path: string; name: string; source: string; gitRemote?: string | null }>
+      detectRoots: string[]
+    }>('/api/projects/detect', { method: 'POST', body: '{}' }),
+  githubMatch: () =>
+    req<{
+      detectRoots: string[]
+      device: Array<{ path: string; name: string; source: string; gitRemote: string | null }>
+      github: Array<{
+        id: number
+        name: string
+        fullName: string
+        private: boolean
+        htmlUrl: string
+        cloneUrl: string
+        match: 'on_device' | 'missing'
+        localPath: string | null
+        matchReason: 'git_remote' | 'basename' | null
+      }>
+    }>('/api/projects/github-match', { method: 'POST', body: '{}' }),
   project: (id: string) => req<{ project: Project }>(`/api/projects/${id}`),
   sniff: (id: string) =>
     req<{ project: Project }>(`/api/projects/${id}/sniff`, { method: 'POST', body: '{}' }),

@@ -7,19 +7,19 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.api
     env_file: .env
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     environment:
       PORT: "8787"
       DB_PATH: /data/agent-kernel.db
-      WORKSPACE_ROOT: ${WORKSPACE_ROOT:-/workspaces}
       WEB_ORIGIN: ${WEB_ORIGIN:-http://127.0.0.1:8080}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       GITHUB_REDIRECT_URI: ${GITHUB_REDIRECT_URI:-}
-      COOKIE_SECURE: ${COOKIE_SECURE:-0}
       WEB_HOST: ${WEB_HOST:-}
     volumes:
       - ak-data:/data
-      - ${WORKSPACE_ROOT:-./workspaces}:/workspaces:rw
     ports:
       - "${API_PORT:-8787}:8787"
     healthcheck:

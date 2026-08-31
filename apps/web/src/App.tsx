@@ -26,6 +26,9 @@ type Me = {
   username?: string | null
   role?: string | null
   setupGaps: string[]
+  executorSetupRequired?: boolean
+  nextSetup?: 'executor' | null
+  nextPath?: string
   githubLogin?: string | null
 }
 
@@ -181,11 +184,8 @@ function PublicHome() {
         {cfg && (
           <div className="hero-meta">
             <div>
-              <strong>Deployment</strong>
-              <span>
-                {cfg.deploymentMode}
-                <em className="meta-hint"> host default — change in Admin</em>
-              </span>
+              <strong>API auth</strong>
+              <span>{cfg.authRequiredForApi ? 'login required' : 'optional'}</span>
             </div>
             <div>
               <strong>Lawpack</strong>
@@ -216,9 +216,9 @@ function LoginPage() {
     api.publicConfig().then(setCfg).catch(() => setCfg(null))
   }, [])
 
-  async function afterAuth(setupRequired: boolean) {
+  async function afterAuth(nextPath: string) {
     await refresh()
-    nav(setupRequired ? '/setup' : '/overview')
+    nav(nextPath)
   }
 
   async function goPassword(e: FormEvent) {
@@ -227,7 +227,7 @@ function LoginPage() {
     setBusy(true)
     try {
       const r = await api.loginPassword(username, password)
-      await afterAuth(r.setupRequired)
+      await afterAuth(r.nextPath)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex))
     } finally {
@@ -240,7 +240,7 @@ function LoginPage() {
     setBusy(true)
     try {
       const r = await api.register(username, password)
-      await afterAuth(r.setupRequired)
+      await afterAuth(r.nextPath)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex))
     } finally {
@@ -253,7 +253,7 @@ function LoginPage() {
     setBusy(true)
     try {
       const r = await api.loginGithubPat(pat.trim())
-      await afterAuth(r.setupRequired)
+      await afterAuth(r.nextPath)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex))
     } finally {
@@ -276,7 +276,7 @@ function LoginPage() {
             DeepSeek Harness.
           </p>
         </div>
-        <p className="muted">{cfg ? `Mode · ${cfg.deploymentMode}` : '…'}</p>
+        <p className="muted">{cfg ? `API · ${cfg.authRequiredForApi ? 'login required' : 'optional'}` : '…'}</p>
       </div>
       <div className="login-panel">
         <div className="login-card">
@@ -394,12 +394,27 @@ function SetupWizard() {
     {
       id: 'dsh',
       title: 'DeepSeek Harness',
-      blurb: 'Ready — pair over HTTPS, control via outbound WSS. MCP tools optional.',
+      blurb: 'Ready — DSH plugin pairs + WSS jobs (coding + operator preset).',
       ready: true,
     },
-    { id: 'opencode', title: 'OpenCode', blurb: 'Placeholder — not wired yet.', ready: false },
-    { id: 'aider', title: 'Aider', blurb: 'Placeholder — not wired yet.', ready: false },
-    { id: 'claude-code', title: 'Claude Code', blurb: 'Placeholder — not wired yet.', ready: false },
+    {
+      id: 'claude-code',
+      title: 'Claude Code',
+      blurb: 'Ready — same WSS channel; device runs `claude -p` in the project cwd.',
+      ready: true,
+    },
+    {
+      id: 'aider',
+      title: 'Aider',
+      blurb: 'Ready — same WSS channel; device runs `aider --message` headless.',
+      ready: true,
+    },
+    {
+      id: 'opencode',
+      title: 'OpenCode',
+      blurb: 'Ready — same WSS channel; device runs `opencode run --auto`.',
+      ready: true,
+    },
     { id: 'codex', title: 'Codex', blurb: 'Placeholder — not wired yet.', ready: false },
     { id: 'cursor-agent', title: 'Cursor Agent', blurb: 'Placeholder — not wired yet.', ready: false },
     { id: 'goose', title: 'Goose', blurb: 'Placeholder — not wired yet.', ready: false },
@@ -413,14 +428,18 @@ function SetupWizard() {
   const [gatewayUrl, setGatewayUrl] = useState('')
   const [gatewayApiKey, setGatewayApiKey] = useState('')
   const [operatorLlm, setOperatorLlm] = useState<'executor' | 'gateway'>('executor')
+  const [injectionMode, setInjectionMode] = useState<'harness_inject' | 'repo_plant'>('harness_inject')
+  const [detectRootsText, setDetectRootsText] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [ok, setOk] = useState<string | null>(null)
+  /** 0 = Pair, 1 = Laws, 2 = Ready */
   const [step, setStep] = useState(0)
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [mcpAck, setMcpAck] = useState(false)
   const [pairCode, setPairCode] = useState<string | null>(null)
+  const [pairKernelUrl, setPairKernelUrl] = useState<string>('')
   const [pairExpiresAt, setPairExpiresAt] = useState<string | null>(null)
   const [pairStatus, setPairStatus] = useState<'idle' | 'pending' | 'claimed' | 'expired'>('idle')
   const [pairBusy, setPairBusy] = useState(false)
@@ -430,18 +449,31 @@ function SetupWizard() {
   useEffect(() => {
     void (async () => {
       try {
-        const [ex, guide] = await Promise.all([api.getMyExecutor(), api.connectGuide()])
+        const [ex, guide, settings] = await Promise.all([
+          api.getMyExecutor(),
+          api.connectGuide(),
+          api.getSettings().catch(() => null),
+        ])
         setWssConnected(Boolean(guide.wssConnected || (ex as { wssConnected?: boolean }).wssConnected))
         setGuideNotes(guide.notes ?? [])
+        if (typeof ex.executorId === 'string' && ex.executorId.trim()) {
+          setExecutorId(ex.executorId)
+        }
         if (ex.gatewayUrl) setGatewayUrl(String(ex.gatewayUrl))
         if (ex.gatewayApiKey === '***') setGatewayApiKey('***')
         if (ex.operatorLlm === 'gateway' || ex.operatorLlm === 'executor') {
           setOperatorLlm(ex.operatorLlm)
         }
+        if (settings?.injectionMode === 'repo_plant' || settings?.injectionMode === 'harness_inject') {
+          setInjectionMode(settings.injectionMode)
+        }
+        if (Array.isArray(ex.detectRoots)) {
+          setDetectRootsText((ex.detectRoots as string[]).join('\n'))
+        }
         if (ex.executorPaired) {
           setPairStatus('claimed')
           setMcpAck(true)
-          if (!incomplete) setStep(1)
+          setStep(2)
         }
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e))
@@ -451,12 +483,21 @@ function SetupWizard() {
     })()
   }, [incomplete])
 
-  const mcpSnippet = `dsh plugin --profile web add github:fr4iser90/agent-kernel-mcp
-# or: dsh plugin --profile web add file:/absolute/path/to/agent-kernel-mcp
-dsh web
+  const mcpSnippet = (() => {
+    const url = pairKernelUrl || 'https://YOUR_KERNEL'
+    const code = pairCode || 'XXXX-XXXX-XXXX'
+    const cli = executorId === 'claude-code' ? 'claude' : executorId
+    return `# Same pair for DSH / Claude / Aider / OpenCode
+agent-kernel-runner pair --url ${url} --code ${code}
+agent-kernel-runner
+# (keeps WSS up; coding jobs spawn: ${cli === 'dsh' ? 'DSH Host sessions' : cli})
 
-# Session Header → Agent Kernel → paste pairing code → Pair
-# DSH opens outbound WSS to this kernel (no Endpoint URL / Trusted Host).`
+# MCP tools (same connect.json) — examples/print-mcp-configs.sh
+# Claude:  .mcp.json  → node …/dist/mcp/index.js
+# OpenCode: opencode.json type:local
+# Aider:   --mcp-servers-file aider.mcp.json
+# DSH:     dsh plugin add …  (optional Header pair instead of CLI)`
+  })()
 
   async function copyMcp() {
     await navigator.clipboard.writeText(mcpSnippet)
@@ -470,6 +511,7 @@ dsh web
     try {
       const started = await api.startPair()
       setPairCode(started.code)
+      setPairKernelUrl(started.kernelUrl)
       setPairExpiresAt(started.expiresAt)
       setPairStatus('pending')
       setMcpAck(false)
@@ -505,10 +547,8 @@ dsh web
     }
   }, [pairStatus, pairCode])
 
-  // Live WSS status — DSH may connect after pair; keep UI in sync.
   useEffect(() => {
     if (loading) return
-    if (step !== 1 && step !== 2) return
     let cancelled = false
     const tick = async () => {
       try {
@@ -526,7 +566,7 @@ dsh web
       cancelled = true
       clearInterval(id)
     }
-  }, [loading, step])
+  }, [loading])
 
   function continueFromPair() {
     if (pairStatus !== 'claimed' && !mcpAck) {
@@ -534,25 +574,30 @@ dsh web
       return
     }
     setErr(null)
+    setStep(1)
+  }
+
+  function continueFromLaws() {
+    setErr(null)
     setStep(2)
   }
 
   async function saveAndTest() {
     setErr(null)
     setOk(null)
-    if (executorId !== 'dsh') {
-      setErr('Only DeepSeek Harness is implemented today. Pick DSH to continue.')
-      return
-    }
     if (pairStatus !== 'claimed' && !mcpAck) {
-      setErr('Pair your DSH first.')
+      setErr('Pair your executor first.')
       return
     }
     setBusy(true)
     try {
       const patch: Record<string, unknown> = {
-        executorId: 'dsh',
+        executorId,
         operatorLlm,
+        detectRoots: detectRootsText
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean),
       }
       if (operatorLlm === 'gateway') {
         patch.gatewayUrl = gatewayUrl.trim() || null
@@ -564,6 +609,7 @@ dsh web
         }
       }
       await api.putMyExecutor(patch)
+      await api.putSettings({ injectionMode })
       const test = await api.testDsh()
       setOk(`WSS · ${JSON.stringify(test).slice(0, 140)}`)
       await refresh()
@@ -576,9 +622,9 @@ dsh web
   }
 
   const stepMeta = [
-    { id: 0, label: 'Executor' },
-    { id: 1, label: 'Pair' },
-    { id: 2, label: 'Finish' },
+    { id: 0, label: 'Pair' },
+    { id: 1, label: 'Laws' },
+    { id: 2, label: 'Ready' },
   ]
 
   return (
@@ -587,17 +633,19 @@ dsh web
         <Link to="/" className="brand">
           agent<span>-</span>kernel
         </Link>
-        <p className="eyebrow">{incomplete ? 'First-run setup' : 'Executor setup'}</p>
-        <h1>Connect your coding executor</h1>
+        <p className="eyebrow">User · executor setup</p>
+        <h1>Connect your executor</h1>
         <p>
-          This site is the control plane. Coding runs on <em>your</em> DSH (Win/Mac/Linux). You pair
-          once; DSH opens outbound WSS. The kernel never dials your PC — no Endpoint URL, no VPN.
+          Pick DSH, Claude Code, Aider, or OpenCode. Pair once over WSS — the device runs jobs
+          locally. Kernel never dials your PC.
         </p>
         <ol className="wizard-progress">
-          {stepMeta.map((s) => (
+          {stepMeta.map((s, i) => (
             <li key={s.id} className={step === s.id ? 'on' : step > s.id ? 'done' : ''}>
               <button type="button" onClick={() => setStep(s.id)} disabled={loading}>
-                <span>{s.id + 1}</span>
+                <span className="wizard-step-num" aria-hidden="true">
+                  {i + 1}
+                </span>
                 {s.label}
               </button>
             </li>
@@ -615,11 +663,11 @@ dsh web
         {loading ? (
           <p className="loading">Loading setup…</p>
         ) : (
-          <div className="wizard-panel">
+          <div className="wizard-card">
             {step === 0 && (
               <>
-                <h2>Which executor?</h2>
-                <p className="sub">Only DeepSeek Harness is wired today.</p>
+                <h2>1 · Pair</h2>
+                <p className="sub">Choose your coding runtime, then claim a pairing code.</p>
                 <div className="mode-grid">
                   {EXECUTORS.map((ex) => (
                     <button
@@ -638,21 +686,6 @@ dsh web
                     </button>
                   ))}
                 </div>
-                <div className="row">
-                  <button type="button" onClick={() => setStep(1)} disabled={executorId !== 'dsh'}>
-                    Continue
-                  </button>
-                </div>
-              </>
-            )}
-
-            {step === 1 && (
-              <>
-                <h2>Pair DeepSeek Harness</h2>
-                <p className="sub">
-                  Install the plugin, generate a code, claim it in the DSH Session Header. That
-                  enables outbound WSS (jobs) + MCP tools.
-                </p>
                 <div className="tunnel-box">
                   <div className="status-strip">
                     <strong>Pair</strong>
@@ -660,7 +693,7 @@ dsh web
                       {pairStatus === 'claimed' || mcpAck
                         ? 'Paired'
                         : pairStatus === 'pending'
-                          ? 'Waiting for DSH…'
+                          ? 'Waiting for device…'
                           : pairStatus === 'expired'
                             ? 'Code expired'
                             : 'Not paired'}
@@ -668,15 +701,30 @@ dsh web
                   </div>
                   <div className="status-strip">
                     <strong>WSS</strong>
-                    <span className="stat-mono">{wssConnected ? 'Connected' : 'Offline — start DSH'}</span>
+                    <span className="stat-mono">{wssConnected ? 'Connected' : 'Offline — start device'}</span>
                   </div>
                   <p className="muted">
-                    1. <code>dsh plugin --profile web add github:fr4iser90/agent-kernel-mcp</code> then{' '}
-                    <code>dsh web</code>
+                    1. Generate code → run the same pair command on your PC (any executor)
+                    <br />
+                    2. Keep <code>agent-kernel-runner</code> up for WSS jobs
+                    <br />
+                    3. Optional: add the same MCP stdio server in Claude / Aider / OpenCode / DSH
                   </p>
-                  <p className="muted">
-                    2. Session Header → <strong>Agent Kernel</strong> → enter code → Pair
-                  </p>
+                  {pairCode && pairKernelUrl ? (
+                    <pre
+                      className="stat-mono"
+                      style={{
+                        margin: 0,
+                        padding: '0.75rem',
+                        fontSize: '0.8rem',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        background: 'rgba(0,0,0,0.35)',
+                        borderRadius: '6px',
+                      }}
+                    >{`agent-kernel-runner pair --url ${pairKernelUrl} --code ${pairCode}
+agent-kernel-runner`}</pre>
+                  ) : null}
                   <div className="row" style={{ alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                     <button type="button" disabled={pairBusy} onClick={() => void startPairing()}>
                       {pairBusy ? '…' : pairCode ? 'New code' : 'Generate pairing code'}
@@ -696,10 +744,10 @@ dsh web
                     </p>
                   ) : null}
                   <details className="note-line">
-                    <summary className="muted">Install snippet / skip wait</summary>
+                    <summary className="muted">Install snippet / already paired</summary>
                     <label>
                       Commands
-                      <textarea readOnly rows={8} value={mcpSnippet} />
+                      <textarea readOnly rows={10} value={mcpSnippet} />
                     </label>
                     <button type="button" className="primary-inline" onClick={() => void copyMcp()}>
                       {copied ? 'Copied' : 'Copy'}
@@ -722,10 +770,79 @@ dsh web
                   ) : null}
                 </div>
                 <div className="row">
+                  <button type="button" onClick={() => continueFromPair()}>
+                    Continue
+                  </button>
+                </div>
+              </>
+            )}
+
+            {step === 1 && (
+              <>
+                <h2>2 · Laws</h2>
+                <p className="sub">
+                  How Lawpack reaches the product workdir. Default keeps the repo clean.
+                </p>
+                <div className="mode-grid">
+                  <button
+                    type="button"
+                    className={`mode-card${injectionMode === 'harness_inject' ? ' on' : ''}`}
+                    onClick={() => setInjectionMode('harness_inject')}
+                    aria-pressed={injectionMode === 'harness_inject'}
+                  >
+                    <strong>
+                      Inject only
+                      <span className="pick-mark">
+                        {injectionMode === 'harness_inject' ? 'default' : ''}
+                      </span>
+                    </strong>
+                    <span>
+                      Pin stays in the kernel. At nudge, Brief + laws go into the session — product
+                      git stays clean.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-card${injectionMode === 'repo_plant' ? ' on' : ''}`}
+                    onClick={() => setInjectionMode('repo_plant')}
+                    aria-pressed={injectionMode === 'repo_plant'}
+                  >
+                    <strong>
+                      Imprint repo
+                      <span className="pick-mark">
+                        {injectionMode === 'repo_plant' ? 'selected' : ''}
+                      </span>
+                    </strong>
+                    <span>
+                      Init writes Lawpack / stubs into the executor workdir (offline CI, share
+                      without kernel).
+                    </span>
+                  </button>
+                </div>
+                <p className="muted note-line">
+                  Fine-tune later in Settings (inject strength, git policy). Per-project override
+                  optional at Init.
+                </p>
+                <div className="wizard-fields tunnel-box">
+                  <label>
+                    Detect roots (device paths)
+                    <textarea
+                      rows={3}
+                      value={detectRootsText}
+                      onChange={(e) => setDetectRootsText(e.target.value)}
+                      placeholder={'/home/you/Documents/Git/ALLEREPOS\n/home/you/work'}
+                    />
+                  </label>
+                  <p className="muted note-line">
+                    Optional. One absolute parent folder per line on the paired machine. Detect
+                    lists direct git children — kernel never scans your disk.
+                  </p>
+                </div>
+                <div className="row">
                   <button type="button" className="ghost" onClick={() => setStep(0)}>
                     Back
                   </button>
-                  <button type="button" onClick={() => continueFromPair()}>
+                  <button type="button" onClick={() => continueFromLaws()}>
                     Continue
                   </button>
                 </div>
@@ -734,39 +851,59 @@ dsh web
 
             {step === 2 && (
               <>
-                <h2>Finish</h2>
+                <h2>3 · Ready</h2>
                 <p className="sub">
-                  Chat runs on your DSH; GateWay only if you want chat without a coding runtime.
+                  Confirm chat backend, then enter the workspace. Laws:{' '}
+                  {injectionMode === 'harness_inject' ? 'inject only' : 'imprint repo'}.
                 </p>
-                <div className="status-strip">
-                  <strong>WSS</strong>
-                  <span className="stat-mono">
-                    {wssConnected ? 'Connected — ready' : 'Offline — keep DSH running'}
-                  </span>
+                <div className="tunnel-box">
+                  <div className="status-strip">
+                    <strong>Pair</strong>
+                    <span className="stat-mono">
+                      {pairStatus === 'claimed' || mcpAck ? 'Paired' : 'Not paired'}
+                    </span>
+                  </div>
+                  <div className="status-strip">
+                    <strong>WSS</strong>
+                    <span className="stat-mono">
+                      {wssConnected ? 'Connected' : 'Offline — keep device runner up'}
+                    </span>
+                  </div>
+                  <p className="muted note-line">
+                    Coding uses <code>{executorId}</code> on the paired device.
+                    {executorId === 'dsh'
+                      ? ' Operator chat uses DSH preset operator by default.'
+                      : ' Operator chat needs GateWay (or keep a DSH Host for preset operator).'}
+                  </p>
                 </div>
-                <fieldset className="wizard-fields">
-                  <legend className="muted">Operator chat LLM</legend>
-                  <label className="row-check">
-                    <input
-                      type="radio"
-                      name="operatorLlm"
-                      checked={operatorLlm === 'executor'}
-                      onChange={() => setOperatorLlm('executor')}
-                    />
-                    Executor (DSH) — default after pair; needs DSH agent preset <code>operator</code>
-                  </label>
-                  <label className="row-check">
-                    <input
-                      type="radio"
-                      name="operatorLlm"
-                      checked={operatorLlm === 'gateway'}
-                      onChange={() => setOperatorLlm('gateway')}
-                    />
-                    GateWay — OpenAI-compatible URL + key (no coding runtime required for chat)
-                  </label>
-                </fieldset>
+                <div className="mode-grid">
+                  <button
+                    type="button"
+                    className={`mode-card${operatorLlm === 'executor' ? ' on' : ''}`}
+                    onClick={() => setOperatorLlm('executor')}
+                    aria-pressed={operatorLlm === 'executor'}
+                  >
+                    <strong>
+                      Your DSH
+                      <span className="pick-mark">{operatorLlm === 'executor' ? 'default' : ''}</span>
+                    </strong>
+                    <span>Default. No URL or key. Chat turns go over WSS.</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-card${operatorLlm === 'gateway' ? ' on' : ''}`}
+                    onClick={() => setOperatorLlm('gateway')}
+                    aria-pressed={operatorLlm === 'gateway'}
+                  >
+                    <strong>
+                      GateWay
+                      <span className="pick-mark">{operatorLlm === 'gateway' ? 'optional' : ''}</span>
+                    </strong>
+                    <span>Optional OpenAI-compatible chat backend only — not coding.</span>
+                  </button>
+                </div>
                 {operatorLlm === 'gateway' && (
-                  <div className="wizard-fields">
+                  <div className="wizard-fields tunnel-box">
                     <label>
                       GateWay URL
                       <input
@@ -827,7 +964,9 @@ function RequireAuth({ children }: { children: ReactNode }) {
     )
   }
   if (!me) return <Navigate to="/login" replace />
-  if (me.setupGaps.length > 0) return <Navigate to="/setup" replace />
+  if (me.nextPath && me.nextPath !== '/overview') {
+    return <Navigate to={me.nextPath} replace />
+  }
   return <>{children}</>
 }
 
@@ -853,6 +992,17 @@ function RequireAuthRelax({ children }: { children: ReactNode }) {
       </div>
     )
   }
+  if (!me) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
+function ExecutorSetupGate({ children }: { children: ReactNode }) {
+  const { me, refresh } = useMe()
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    void refresh().finally(() => setReady(true))
+  }, [refresh])
+  if (!ready) return <p className="loading">Loading…</p>
   if (!me) return <Navigate to="/login" replace />
   return <>{children}</>
 }
@@ -1011,21 +1161,50 @@ function ProjectsPage() {
   const [q, setQ] = useState('')
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
-  const [scanPath, setScanPath] = useState('')
-  const [ghLogin, setGhLogin] = useState('')
-  const [busy, setBusy] = useState<string | null>(null)
+  const [gitRemote, setGitRemote] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [ok, setOk] = useState('')
   const [showAdd, setShowAdd] = useState(false)
-  const [showImport, setShowImport] = useState(false)
+  const [detectBusy, setDetectBusy] = useState(false)
+  const [ghBusy, setGhBusy] = useState(false)
+  const [rootsBusy, setRootsBusy] = useState(false)
+  const [detectRootsText, setDetectRootsText] = useState('')
+  const [candidates, setCandidates] = useState<
+    Array<{ path: string; name: string; source: string; gitRemote?: string | null }>
+  >([])
+  const [githubRepos, setGithubRepos] = useState<
+    Array<{
+      id: number
+      name: string
+      fullName: string
+      private: boolean
+      htmlUrl: string
+      cloneUrl: string
+      match: 'on_device' | 'missing'
+      localPath: string | null
+      matchReason: 'git_remote' | 'basename' | null
+    }>
+  >([])
+  const [wssConnected, setWssConnected] = useState(false)
 
   async function reload() {
     setProjects((await api.projects()).projects)
   }
   useEffect(() => {
-    if (me?.githubLogin) setGhLogin(me.githubLogin)
     reload().catch((e) => setErr(String(e)))
-  }, [me])
+    void api
+      .connectGuide()
+      .then((g) => setWssConnected(Boolean(g.wssConnected)))
+      .catch(() => setWssConnected(false))
+    void api
+      .getMyExecutor()
+      .then((ex) => {
+        if (Array.isArray(ex.detectRoots)) {
+          setDetectRootsText((ex.detectRoots as string[]).join('\n'))
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const filtered = projects.filter((p) => {
     const s = q.trim().toLowerCase()
@@ -1037,9 +1216,14 @@ function ProjectsPage() {
     e.preventDefault()
     setErr(null)
     try {
-      await api.registerProject({ name, path })
+      await api.registerProject({
+        name,
+        path,
+        ...(gitRemote.trim() ? { gitRemote: gitRemote.trim() } : {}),
+      })
       setName('')
       setPath('')
+      setGitRemote('')
       setShowAdd(false)
       setOk(`Registered ${name}`)
       await reload()
@@ -1048,50 +1232,125 @@ function ProjectsPage() {
     }
   }
 
-  async function onScanLocal() {
+  async function saveDetectRoots() {
     setErr(null)
-    setBusy('scan')
+    setRootsBusy(true)
     try {
-      const r = await api.scanLocal(scanPath, true)
+      const detectRoots = detectRootsText
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+      await api.putMyExecutor({ detectRoots })
       setOk(
-        `Scan done: +${r.registered.length} registered, ${r.skipped.length} skipped, ${r.analyzed.length} analyzed`,
+        detectRoots.length
+          ? `Saved ${detectRoots.length} detect root(s)`
+          : 'Cleared detect roots (sessions only)',
       )
-      await reload()
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex))
     } finally {
-      setBusy(null)
+      setRootsBusy(false)
     }
   }
 
-  async function onImportGh(visibility: 'all' | 'public') {
+  async function onDetect() {
     setErr(null)
-    setBusy(visibility)
+    setOk('')
+    setDetectBusy(true)
     try {
-      const r = await api.importGithub({
-        visibility,
-        login: ghLogin || undefined,
-        clone: true,
-        analyze: true,
-      })
-      setOk(
-        `GitHub ${visibility}: ${r.repoCount} listed, +${r.registered.length} registered, ${r.analyzed.length} analyzed`,
-      )
-      await reload()
+      const r = await api.detectProjects()
+      setCandidates(r.candidates)
+      if (Array.isArray(r.detectRoots)) setDetectRootsText(r.detectRoots.join('\n'))
+      setShowAdd(true)
+      setOk(`Found ${r.candidates.length} workdir(s) on device`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex))
     } finally {
-      setBusy(null)
+      setDetectBusy(false)
     }
+  }
+
+  async function onGithubMatch() {
+    setErr(null)
+    setOk('')
+    setGhBusy(true)
+    try {
+      const r = await api.githubMatch()
+      setCandidates(r.device)
+      setGithubRepos(r.github)
+      if (Array.isArray(r.detectRoots)) setDetectRootsText(r.detectRoots.join('\n'))
+      const onDevice = r.github.filter((g) => g.match === 'on_device').length
+      setOk(
+        `Device ${r.device.length} · GitHub ${r.github.length} (${onDevice} on device, ${r.github.length - onDevice} missing locally)`,
+      )
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : String(ex))
+    } finally {
+      setGhBusy(false)
+    }
+  }
+
+  function pickCandidate(c: { path: string; name: string; gitRemote?: string | null }) {
+    setPath(c.path)
+    setName(c.name)
+    setGitRemote(c.gitRemote?.trim() || '')
+    setShowAdd(true)
+  }
+
+  function pickGithub(g: {
+    name: string
+    match: 'on_device' | 'missing'
+    localPath: string | null
+    cloneUrl: string
+  }) {
+    if (g.match !== 'on_device' || !g.localPath) {
+      setErr(
+        `${g.name} is missing on the device — clone under a detect root, then Match GitHub again. GitHub alone is not executor-ready.`,
+      )
+      return
+    }
+    setPath(g.localPath)
+    setName(g.name)
+    setGitRemote(g.cloneUrl)
+    setShowAdd(true)
+    setErr(null)
   }
 
   return (
     <Shell>
       <PageHead
         title="Projects"
-        lead="Your catalog. Paths must be visible to the API container (mounted workspaces)."
+        lead="Register an opaque executor workdir path (how DSH/Claude sees the repo). The kernel never scans or clones your filesystem."
       />
       <Flash err={err} ok={ok || null} />
+
+      <div className="card">
+        <h2>How this works</h2>
+        <p className="muted" style={{ margin: 0 }}>
+          Paths live on your paired device. Detect uses recent sessions plus optional{' '}
+          <strong>detect roots</strong> (parent folders). GitHub lists remotes and marks{' '}
+          <strong>on device</strong> vs <strong>missing</strong> — a GitHub repo alone is not
+          executor-ready.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>Detect roots</h2>
+        <label>
+          Parent folders on the device (one per line)
+          <textarea
+            rows={3}
+            value={detectRootsText}
+            onChange={(e) => setDetectRootsText(e.target.value)}
+            placeholder="/home/you/Documents/Git/ALLEREPOS"
+          />
+        </label>
+        <div className="row" style={{ marginTop: '0.75rem' }}>
+          <button type="button" disabled={rootsBusy} onClick={() => void saveDetectRoots()}>
+            {rootsBusy ? 'Saving…' : 'Save roots'}
+          </button>
+        </div>
+      </div>
 
       <div className="toolbar">
         <input
@@ -1100,13 +1359,75 @@ function ProjectsPage() {
           onChange={(e) => setQ(e.target.value)}
           placeholder="Filter projects…"
         />
+        <button type="button" disabled={detectBusy || !wssConnected} onClick={() => void onDetect()}>
+          {detectBusy ? 'Detecting…' : wssConnected ? 'Detect from device' : 'Detect (WSS offline)'}
+        </button>
+        <button
+          type="button"
+          disabled={ghBusy || !wssConnected || !me?.githubLogin}
+          onClick={() => void onGithubMatch()}
+          title={me?.githubLogin ? undefined : 'Sign in with GitHub to match repos'}
+        >
+          {ghBusy ? 'Matching…' : me?.githubLogin ? 'Match GitHub' : 'Match GitHub (login required)'}
+        </button>
         <button type="button" onClick={() => setShowAdd((v) => !v)}>
           {showAdd ? 'Close' : 'Register path'}
         </button>
-        <button type="button" className="ghost" onClick={() => setShowImport((v) => !v)}>
-          {showImport ? 'Close import' : 'Import'}
-        </button>
       </div>
+
+      {(candidates.length > 0 || githubRepos.length > 0) && (
+        <div className="catalog-dual">
+          <div className="card">
+            <h2>On device</h2>
+            {candidates.length === 0 ? (
+              <p className="muted">No workdirs yet — Detect or set roots.</p>
+            ) : (
+              <ul className="project-list">
+                {candidates.map((c) => (
+                  <li key={`${c.source}:${c.path}`}>
+                    <button type="button" className="ghost" onClick={() => pickCandidate(c)}>
+                      <strong>{c.name}</strong>
+                      <span className="muted path-line">
+                        {c.path} · {c.source}
+                        {c.gitRemote ? ` · ${c.gitRemote}` : ''}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="card">
+            <h2>GitHub</h2>
+            {!me?.githubLogin ? (
+              <p className="muted">Sign in with GitHub to list remotes.</p>
+            ) : githubRepos.length === 0 ? (
+              <p className="muted">Run Match GitHub to load repos and device status.</p>
+            ) : (
+              <ul className="project-list">
+                {githubRepos.map((g) => (
+                  <li key={g.id}>
+                    <button type="button" className="ghost" onClick={() => pickGithub(g)}>
+                      <strong>
+                        {g.fullName}{' '}
+                        <span className={`badge match-${g.match}`}>
+                          {g.match === 'on_device' ? 'on device' : 'missing'}
+                        </span>
+                        {g.private ? <span className="badge">private</span> : null}
+                      </strong>
+                      <span className="muted path-line">
+                        {g.match === 'on_device' && g.localPath
+                          ? `${g.localPath}${g.matchReason ? ` · ${g.matchReason}` : ''}`
+                          : 'Clone under a detect root on the device, then match again'}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
 
       {showAdd && (
         <form className="card" onSubmit={(e) => void onSubmit(e)}>
@@ -1116,54 +1437,27 @@ function ProjectsPage() {
             <input value={name} onChange={(e) => setName(e.target.value)} required />
           </label>
           <label>
-            Absolute path (inside container / host mount)
+            Executor workdir path
             <input
               value={path}
               onChange={(e) => setPath(e.target.value)}
-              placeholder="/workspaces/my-repo"
+              placeholder="/home/you/src/my-repo"
               required
             />
           </label>
+          <label>
+            Git remote (optional)
+            <input
+              value={gitRemote}
+              onChange={(e) => setGitRemote(e.target.value)}
+              placeholder="https://github.com/you/repo.git"
+            />
+          </label>
+          <p className="muted note-line">
+            Use the absolute path on the machine that runs DSH / Claude / Aider / OpenCode.
+          </p>
           <button type="submit">Register</button>
         </form>
-      )}
-
-      {showImport && (
-        <div className="card">
-          <h2>Import catalog</h2>
-          <label>
-            Local scan root
-            <input
-              value={scanPath}
-              onChange={(e) => setScanPath(e.target.value)}
-              placeholder="/workspaces"
-            />
-          </label>
-          <button
-            type="button"
-            disabled={!!busy || !scanPath.trim()}
-            onClick={() => void onScanLocal()}
-          >
-            {busy === 'scan' ? 'Scanning…' : 'Scan local + analyze'}
-          </button>
-          <label>
-            GitHub login
-            <input
-              value={ghLogin}
-              onChange={(e) => setGhLogin(e.target.value)}
-              placeholder="your-github-user"
-            />
-          </label>
-          <div className="row">
-            <button type="button" disabled={!!busy} onClick={() => void onImportGh('all')}>
-              {busy === 'all' ? 'Importing…' : 'Import all / private'}
-            </button>
-            <button type="button" className="ghost" disabled={!!busy} onClick={() => void onImportGh('public')}>
-              {busy === 'public' ? 'Importing…' : 'Public only'}
-            </button>
-          </div>
-          <p className="muted">Private import needs GitHub OAuth or PAT login.</p>
-        </div>
       )}
 
       {!filtered.length ? (
@@ -1172,9 +1466,6 @@ function ProjectsPage() {
           <div className="row center">
             <button type="button" onClick={() => setShowAdd(true)}>
               Register path
-            </button>
-            <button type="button" className="ghost" onClick={() => setShowImport(true)}>
-              Import
             </button>
           </div>
         </div>
@@ -1254,11 +1545,6 @@ function ProjectDetail() {
   }, [id])
   if (!id) return null
 
-  const meta = project?.meta ?? {}
-  const facts = (meta.facts as Record<string, unknown> | undefined) ?? undefined
-  const advice = (meta.advice as string[] | undefined) ?? []
-  const hygiene = facts?.hygiene as { hasReadme?: boolean } | undefined
-
   function latestFor(assignmentId: string) {
     return runs.find((r) => r.assignment_id === assignmentId)
   }
@@ -1298,115 +1584,12 @@ function ProjectDetail() {
                 {assignments.filter((a) => !a.paused && latestFor(a.id)?.outcome === 'running').length}
               </span>
             </div>
-            <div className="stat wide">
-              <strong>Last analyzed</strong>
-              <span className="stat-mono">
-                {String(meta.factsAt ?? facts?.analyzedAt ?? '—')}
-              </span>
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-head">
-              <h2>Catalog metadata</h2>
-              <button
-                type="button"
-                className="ghost"
-                disabled={!!busy}
-                onClick={() => {
-                  setBusy('analyze')
-                  api
-                    .analyze(id)
-                    .then(() => {
-                      setOk('Analyze refreshed')
-                      return reload()
-                    })
-                    .catch((e) => setErr(String(e)))
-                    .finally(() => setBusy(null))
-                }}
-              >
-                {busy === 'analyze' ? '…' : 'Refresh analyze'}
-              </button>
-            </div>
-            {!facts && !advice.length ? (
-              <div className="empty tight">
-                No analyzer facts yet. Run analyze (or import with analyze).
-              </div>
-            ) : (
-              <div className="meta-grid">
-                {facts?.packageManager != null && (
-                  <div>
-                    <strong>Package</strong>
-                    <span>{String(facts.packageManager)}</span>
-                  </div>
-                )}
-                {Boolean(meta.gateCommand || facts?.gateCommand) && (
-                  <div>
-                    <strong>Gate</strong>
-                    <span className="stat-mono">
-                      {String(meta.gateCommand ?? facts?.gateCommand)}
-                    </span>
-                  </div>
-                )}
-                {facts?.daysSinceTouch != null && (
-                  <div>
-                    <strong>Days since touch</strong>
-                    <span>{String(facts.daysSinceTouch)}</span>
-                  </div>
-                )}
-                {facts?.fileCountApprox != null && (
-                  <div>
-                    <strong>Files ~</strong>
-                    <span>{String(facts.fileCountApprox)}</span>
-                  </div>
-                )}
-                {hygiene && (
-                  <div>
-                    <strong>README</strong>
-                    <span>{hygiene.hasReadme ? 'yes' : 'missing'}</span>
-                  </div>
-                )}
-                {project?.gitRemote && (
-                  <div className="span-2">
-                    <strong>Remote</strong>
-                    <span className="stat-mono">{project.gitRemote}</span>
-                  </div>
-                )}
-              </div>
-            )}
-            {advice.length > 0 && (
-              <ul className="advice-list">
-                {advice.map((a) => (
-                  <li key={a}>{a}</li>
-                ))}
-              </ul>
-            )}
           </div>
 
           <div className="card">
             <h2>Initialize lawpack</h2>
-            <p className="muted">
-              Sniff detects layout; Init plants tracking files for the chosen preset.
-            </p>
+            <p className="muted">Init plants tracking files for the chosen preset on the executor workdir.</p>
             <div className="row">
-              <button
-                type="button"
-                className="ghost"
-                disabled={!!busy}
-                onClick={() => {
-                  setBusy('sniff')
-                  api
-                    .sniff(id)
-                    .then(() => {
-                      setOk('Sniff complete')
-                      return reload()
-                    })
-                    .catch((e) => setErr(String(e)))
-                    .finally(() => setBusy(null))
-                }}
-              >
-                {busy === 'sniff' ? '…' : 'Sniff'}
-              </button>
               <select value={preset} onChange={(e) => setPreset(e.target.value)}>
                 <option value="clean">clean</option>
                 <option value="tracking">tracking</option>
@@ -2659,7 +2842,7 @@ function RunDetailPage() {
               <h2>Live transcript</h2>
               {!tx ? (
                 <div className="empty tight">
-                  Transcript not loaded. Configure My Executor (host_http) and refresh — errors
+                  Transcript not loaded. Pair your executor (outbound WSS) and refresh — errors
                   surface above (no silent empty).
                 </div>
               ) : !tx.messages.length ? (
@@ -2726,8 +2909,8 @@ function RunDetailPage() {
 function SettingsPage() {
   const { me } = useMe()
   const [form, setForm] = useState({
-    workspaceRoot: '',
-    githubCloneRoot: '',
+    githubSignupMode: 'closed' as 'closed' | 'open' | 'allowlist',
+    githubSignupAllowlist: '',
     githubDefaultLogin: '',
     githubOAuthClientId: '',
     githubOAuthClientSecret: '',
@@ -2741,7 +2924,6 @@ function SettingsPage() {
     defaultScheduleMode: 'infinite',
     defaultReviewMode: 'human',
     defaultCronExpr: '0 3 * * *',
-    setupCompleted: false,
   })
   const [err, setErr] = useState<string | null>(null)
   const [ok, setOk] = useState<string | null>(null)
@@ -2756,8 +2938,13 @@ function SettingsPage() {
       .then((s) => {
         setRaw(JSON.stringify(s, null, 2))
         setForm({
-          workspaceRoot: String(s.workspaceRoot ?? ''),
-          githubCloneRoot: String(s.githubCloneRoot ?? ''),
+          githubSignupMode:
+            s.githubSignupMode === 'open' || s.githubSignupMode === 'allowlist'
+              ? s.githubSignupMode
+              : 'closed',
+          githubSignupAllowlist: Array.isArray(s.githubSignupAllowlist)
+            ? (s.githubSignupAllowlist as string[]).join('\n')
+            : '',
           githubDefaultLogin: String(s.githubDefaultLogin ?? ''),
           githubOAuthClientId: String(s.githubOAuthClientId ?? ''),
           githubOAuthClientSecret:
@@ -2774,7 +2961,6 @@ function SettingsPage() {
           defaultScheduleMode: String(s.defaultScheduleMode ?? 'infinite'),
           defaultReviewMode: String(s.defaultReviewMode ?? 'human'),
           defaultCronExpr: String(s.defaultCronExpr ?? ''),
-          setupCompleted: Boolean(s.setupCompleted),
         })
       })
       .catch((e) => setErr(String(e)))
@@ -2795,9 +2981,13 @@ function SettingsPage() {
     setOk(null)
     setBusy(true)
     try {
+      const allowlist = form.githubSignupAllowlist
+        .split(/[\n,]+/)
+        .map((x) => x.trim().replace(/^@/, ''))
+        .filter(Boolean)
       const body: Record<string, unknown> = {
-        workspaceRoot: form.workspaceRoot || null,
-        githubCloneRoot: form.githubCloneRoot || null,
+        githubSignupMode: form.githubSignupMode,
+        githubSignupAllowlist: allowlist,
         githubDefaultLogin: form.githubDefaultLogin || null,
         githubOAuthClientId: form.githubOAuthClientId || null,
         githubOAuthRedirectUri: form.githubOAuthRedirectUri || null,
@@ -2810,7 +3000,6 @@ function SettingsPage() {
         defaultScheduleMode: form.defaultScheduleMode,
         defaultReviewMode: form.defaultReviewMode,
         defaultCronExpr: form.defaultCronExpr || null,
-        setupCompleted: form.setupCompleted,
       }
       if (form.githubOAuthClientSecret) {
         body.githubOAuthClientSecret = form.githubOAuthClientSecret
@@ -2829,7 +3018,7 @@ function SettingsPage() {
     <Shell>
       <PageHead
         title="Settings"
-        lead="Host-wide configuration. Deployment policy is under Admin; per-user DSH under Executor."
+        lead="Host-wide configuration. Signup policy default is closed. Per-user DSH under Executor."
       />
       <Flash err={err} ok={ok} />
       {loading ? (
@@ -2837,22 +3026,56 @@ function SettingsPage() {
       ) : (
         <>
       <div className="card">
-        <h2>Workspace</h2>
-        <label>
-          Workspace root
-          <input
-            value={form.workspaceRoot}
-            onChange={(e) => setForm({ ...form, workspaceRoot: e.target.value })}
-            placeholder="/workspaces"
-          />
-        </label>
-        <label>
-          GitHub clone root
-          <input
-            value={form.githubCloneRoot}
-            onChange={(e) => setForm({ ...form, githubCloneRoot: e.target.value })}
-          />
-        </label>
+        <h2>Signup</h2>
+        <p className="muted">
+          Default closed. Controls whether GitHub may create new accounts. Password self-register
+          is only for the first admin on an empty host.
+        </p>
+        <div className="mode-grid">
+          {(
+            [
+              {
+                id: 'closed' as const,
+                title: 'Closed',
+                blurb: 'No new accounts via GitHub. Existing users may still log in.',
+              },
+              {
+                id: 'open' as const,
+                title: 'Open',
+                blurb: 'Anyone who authenticates with GitHub gets an operator account.',
+              },
+              {
+                id: 'allowlist' as const,
+                title: 'Allowlist',
+                blurb: 'New GitHub accounts only for listed logins.',
+              },
+            ] as const
+          ).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={`mode-card${form.githubSignupMode === m.id ? ' on' : ''}`}
+              onClick={() => setForm({ ...form, githubSignupMode: m.id })}
+            >
+              <strong>{m.title}</strong>
+              <span>{m.blurb}</span>
+            </button>
+          ))}
+        </div>
+        {form.githubSignupMode === 'allowlist' && (
+          <label className="field" style={{ marginTop: '1rem' }}>
+            Allowed GitHub logins (one per line)
+            <textarea
+              rows={4}
+              value={form.githubSignupAllowlist}
+              onChange={(e) => setForm({ ...form, githubSignupAllowlist: e.target.value })}
+              placeholder={'alice\nbob'}
+            />
+          </label>
+        )}
+      </div>
+      <div className="card">
+        <h2>GitHub OAuth App</h2>
         <label>
           Default GitHub login
           <input
@@ -2860,10 +3083,6 @@ function SettingsPage() {
             onChange={(e) => setForm({ ...form, githubDefaultLogin: e.target.value })}
           />
         </label>
-      </div>
-
-      <div className="card">
-        <h2>GitHub OAuth App</h2>
         <label>
           Client ID
           <input
@@ -2979,14 +3198,6 @@ function SettingsPage() {
             onChange={(e) => setForm({ ...form, defaultCronExpr: e.target.value })}
           />
         </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={form.setupCompleted}
-            onChange={(e) => setForm({ ...form, setupCompleted: e.target.checked })}
-          />
-          Mark global setup completed
-        </label>
       </div>
 
       <div className="row">
@@ -3006,7 +3217,7 @@ function SettingsPage() {
           Test DSH
         </button>
         <Link className="btn ghost" to="/admin">
-          Admin deployment
+          Admin
         </Link>
         <button type="button" className="ghost" onClick={() => setShowRaw((v) => !v)}>
           {showRaw ? 'Hide raw JSON' : 'Show raw JSON'}
@@ -3026,200 +3237,7 @@ function SettingsPage() {
 }
 
 function AdminPage() {
-  const { me } = useMe()
-  const [mode, setMode] = useState<'personal' | 'hosted' | 'hybrid'>('hybrid')
-  const [authApi, setAuthApi] = useState(true)
-  const [bootstrap, setBootstrap] = useState(true)
-  const [githubSignupMode, setGithubSignupMode] = useState<'closed' | 'open' | 'allowlist'>(
-    'closed',
-  )
-  const [allowlistText, setAllowlistText] = useState('')
-  const [err, setErr] = useState<string | null>(null)
-  const [ok, setOk] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    api
-      .getDeployment()
-      .then((d) => {
-        setMode(d.deploymentMode)
-        setAuthApi(d.authRequiredForApi)
-        setBootstrap(d.allowBootstrapRegister)
-        setGithubSignupMode(d.githubSignupMode ?? 'closed')
-        setAllowlistText((d.githubSignupAllowlist ?? []).join('\n'))
-      })
-      .catch((e) => setErr(String(e)))
-  }, [])
-
-  if (me && me.role !== 'admin') {
-    return (
-      <Shell>
-        <PageHead title="Admin" />
-        <Flash err="Admin role required." />
-      </Shell>
-    )
-  }
-
-  async function save() {
-    setErr(null)
-    setOk(null)
-    setBusy(true)
-    try {
-      const allowlist = allowlistText
-        .split(/[\n,]+/)
-        .map((x) => x.trim().replace(/^@/, ''))
-        .filter(Boolean)
-      const d = (await api.putDeployment({
-        deploymentMode: mode,
-        authRequiredForApi: authApi,
-        allowBootstrapRegister: bootstrap,
-        githubSignupMode,
-        githubSignupAllowlist: allowlist,
-      })) as {
-        deploymentMode: typeof mode
-        authRequiredForApi: boolean
-        allowBootstrapRegister: boolean
-        githubSignupMode: typeof githubSignupMode
-        githubSignupAllowlist: string[]
-      }
-      setMode(d.deploymentMode)
-      setAuthApi(d.authRequiredForApi)
-      setBootstrap(d.allowBootstrapRegister)
-      setGithubSignupMode(d.githubSignupMode)
-      setAllowlistText((d.githubSignupAllowlist ?? []).join('\n'))
-      setOk('Deployment policy saved')
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const modes: Array<{ id: typeof mode; title: string; blurb: string }> = [
-    {
-      id: 'hybrid',
-      title: 'Hybrid',
-      blurb: 'Public home. Login required for catalog, cron, executor APIs.',
-    },
-    {
-      id: 'personal',
-      title: 'Personal',
-      blurb: 'Single-operator host. Softer auth defaults for local use.',
-    },
-    {
-      id: 'hosted',
-      title: 'Hosted',
-      blurb: 'Multi-user server. Treat this as a shared control plane.',
-    },
-  ]
-
-  const signupModes: Array<{
-    id: typeof githubSignupMode
-    title: string
-    blurb: string
-  }> = [
-    {
-      id: 'closed',
-      title: 'Closed (default)',
-      blurb: 'Existing users may log in with GitHub. No new accounts via OAuth/PAT.',
-    },
-    {
-      id: 'open',
-      title: 'Open',
-      blurb: 'Anyone who authenticates with GitHub gets an operator account.',
-    },
-    {
-      id: 'allowlist',
-      title: 'Allowlist',
-      blurb: 'New accounts only for listed GitHub logins. Everyone else login-only if already registered.',
-    },
-  ]
-
-  return (
-    <Shell>
-      <PageHead
-        title="Admin"
-        lead="Who can use this host and how. Self-host elsewhere = clone repo + docker compose."
-      />
-      <Flash err={err} ok={ok} />
-
-      <div className="card">
-        <h2>Deployment mode</h2>
-        <div className="mode-grid">
-          {modes.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className={`mode-card${mode === m.id ? ' on' : ''}`}
-              onClick={() => {
-                setMode(m.id)
-                setAuthApi(m.id !== 'personal')
-              }}
-            >
-              <strong>{m.title}</strong>
-              <span>{m.blurb}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>GitHub signup</h2>
-        <p className="muted">
-          Login for existing accounts always works. This only controls whether OAuth/PAT may create
-          new users.
-        </p>
-        <div className="mode-grid">
-          {signupModes.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className={`mode-card${githubSignupMode === m.id ? ' on' : ''}`}
-              onClick={() => setGithubSignupMode(m.id)}
-            >
-              <strong>{m.title}</strong>
-              <span>{m.blurb}</span>
-            </button>
-          ))}
-        </div>
-        {githubSignupMode === 'allowlist' && (
-          <label className="field" style={{ marginTop: '1rem' }}>
-            Allowed GitHub logins (one per line or comma-separated)
-            <textarea
-              rows={5}
-              value={allowlistText}
-              onChange={(e) => setAllowlistText(e.target.value)}
-              placeholder={'alice\nbob'}
-            />
-          </label>
-        )}
-      </div>
-
-      <div className="card">
-        <h2>Access policy</h2>
-        <label className="check">
-          <input type="checkbox" checked={authApi} onChange={(e) => setAuthApi(e.target.checked)} />
-          Auth required for server API
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={bootstrap}
-            onChange={(e) => setBootstrap(e.target.checked)}
-          />
-          Allow bootstrap register (first admin only when userCount = 0)
-        </label>
-        <div className="row">
-          <button type="button" disabled={busy} onClick={() => void save()}>
-            {busy ? 'Saving…' : 'Save deployment'}
-          </button>
-          <Link className="btn ghost" to="/settings">
-            Host settings
-          </Link>
-        </div>
-      </div>
-    </Shell>
-  )
+  return <Navigate to="/settings" replace />
 }
 
 function ChatPage() {
@@ -3314,7 +3332,9 @@ export default function App() {
             path="/setup"
             element={
               <RequireAuthRelax>
-                <SetupWizard />
+                <ExecutorSetupGate>
+                  <SetupWizard />
+                </ExecutorSetupGate>
               </RequireAuthRelax>
             }
           />

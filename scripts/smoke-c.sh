@@ -4,9 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${SMOKE_PORT:-18787}"
 DB="/tmp/ak-smoke-$$.db"
-WORK="${DSH_WS_HOST:-/tmp/dsh-docker-ws}/ak-smoke-$$"
-DSH_WS_CONTAINER="${DSH_WS_CONTAINER:-/workspace}"
-DSH_WS_HOST_PREFIX="${DSH_WS_HOST:-/tmp/dsh-docker-ws}"
+# Opaque executor workdir — kernel never owns FS; path is what DSH understands.
+WORK="${DSH_SMOKE_WORKDIR:-/workspace/ak-smoke-$$}"
 
 DSH_URL="${DSH_URL:-http://localhost:13080}"
 DSH_HOST="${DSH_HOST:-localhost:13080}"
@@ -20,14 +19,6 @@ cleanup() {
   rm -f "$DB"
 }
 trap cleanup EXIT
-
-mkdir -p "$WORK"
-echo "# smoke" >"$WORK/README.md"
-git -C "$WORK" init -q
-git -C "$WORK" config user.email smoke@local
-git -C "$WORK" config user.name smoke
-git -C "$WORK" add README.md
-git -C "$WORK" commit -qm init
 
 echo "== DSH host ping =="
 curl -sf -H "Host: ${DSH_HOST}" "${DSH_URL}/" >/dev/null || {
@@ -54,16 +45,13 @@ echo "== my executor host_http =="
 curl -sf "${auth[@]}" -X PUT "$API/api/me/executor" -d "$(jq -n \
   --arg ep "$DSH_URL" --arg th "$DSH_HOST" \
   '{dshInvokeMode:"host_http",dshEndpoint:$ep,dshTrustedHost:$th,executorId:"dsh"}')" >/dev/null
-curl -sf "${auth[@]}" -X PUT "$API/api/settings" -d "$(jq -n \
-  --arg hp "$DSH_WS_HOST_PREFIX" --arg cp "$DSH_WS_CONTAINER" \
-  '{dshWorkdirHostPrefix:$hp,dshWorkdirContainerPrefix:$cp,injectionMode:"harness_inject",injectStrength:"hybrid",setupCompleted:true}')" >/dev/null
+curl -sf "${auth[@]}" -X PUT "$API/api/settings" -d \
+  '{"injectionMode":"harness_inject","injectStrength":"hybrid"}' >/dev/null
 curl -sf "${auth[@]}" -X POST "$API/api/settings/test-dsh" >/dev/null
 
-echo "== project init =="
+echo "== project init (opaque executor path, DB-only) =="
 proj=$(curl -sf "${auth[@]}" -X POST "$API/api/projects" -d "$(jq -n --arg p "$WORK" '{name:"smoke",path:$p}')")
 pid=$(echo "$proj" | jq -r .project.id)
-curl -sf "${auth[@]}" -X POST "$API/api/projects/$pid/sniff" >/dev/null
-curl -sf "${auth[@]}" -X POST "$API/api/projects/$pid/analyze" >/dev/null
 curl -sf "${auth[@]}" -X POST "$API/api/projects/$pid/init" -d '{"presetId":"tracking"}' >/dev/null
 
 echo "== project assignment nudge =="

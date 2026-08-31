@@ -1,14 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { execSync } from 'node:child_process'
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import type { SessionBrief } from '@agent-kernel/session-brief'
 import type { ProjectRepository } from '../domain/catalog/project-repository.js'
 import type { Project } from '../domain/catalog/project.js'
@@ -20,8 +12,6 @@ import {
 } from '../domain/identity/user.js'
 import {
   DEFAULT_SETTINGS,
-  deploymentPresets,
-  settingsSetupGaps,
   userExecutorSetupGaps,
   type AgentKernelSettings,
 } from '../domain/settings/settings.js'
@@ -35,10 +25,10 @@ import { cronMatches } from '../infrastructure/cron.js'
 import { executorDeviceHub } from '../infrastructure/executor/device-hub.js'
 import { GitHubClient } from '../infrastructure/github/github-client.js'
 import {
-  cloneGithubRepo,
   fetchGithubReposForImport,
-  registerScanResults,
-  scanLocalGitRoots,
+  matchGithubReposToDevice,
+  type DeviceWorkdirCandidate,
+  type GithubRepoMatch,
 } from '../infrastructure/catalog/local-and-github.js'
 import type { SqliteSettingsRepository } from '../infrastructure/sqlite/settings-repository.js'
 import type Database from 'better-sqlite3'
@@ -96,17 +86,12 @@ export class Kernel {
 
   putSettings(patch: Partial<AgentKernelSettings>): AgentKernelSettings {
     const cur = this.settings()
+    const normalized: Partial<AgentKernelSettings> = { ...patch }
     const next: AgentKernelSettings = {
       ...cur,
-      ...patch,
-      layoutPaths: { ...cur.layoutPaths, ...(patch.layoutPaths ?? {}) },
+      ...normalized,
+      layoutPaths: { ...cur.layoutPaths, ...(normalized.layoutPaths ?? {}) },
       schemaVersion: 1,
-    }
-    if (patch.deploymentMode && patch.deploymentMode !== cur.deploymentMode) {
-      const presets = deploymentPresets(patch.deploymentMode)
-      if (patch.authRequiredForApi === undefined) {
-        next.authRequiredForApi = presets.authRequiredForApi
-      }
     }
     if (next.dshEndpoint && !next.dshTrustedHost) {
       try {
@@ -115,13 +100,22 @@ export class Kernel {
         /* keep null */
       }
     }
-    if (patch.githubSignupMode !== undefined) {
+    if (normalized.githubSignupMode !== undefined) {
       if (!['closed', 'open', 'allowlist'].includes(next.githubSignupMode)) {
         throw new Error('githubSignupMode must be closed | open | allowlist')
       }
+      if (next.githubSignupMode === 'allowlist') {
+        const list = (next.githubSignupAllowlist ?? [])
+          .map((x) => String(x).trim().replace(/^@/, ''))
+          .filter(Boolean)
+        if (!list.length) {
+          throw new Error('githubSignupMode=allowlist requires at least one GitHub login')
+        }
+        next.githubSignupAllowlist = list
+      }
     }
-    if (patch.githubSignupAllowlist !== undefined) {
-      next.githubSignupAllowlist = (patch.githubSignupAllowlist ?? [])
+    if (normalized.githubSignupAllowlist !== undefined) {
+      next.githubSignupAllowlist = (normalized.githubSignupAllowlist ?? [])
         .map((x) => String(x).trim().replace(/^@/, ''))
         .filter(Boolean)
     }
@@ -129,14 +123,20 @@ export class Kernel {
   }
 
   setupGaps(): string[] {
-    return settingsSetupGaps(this.settings())
+    return []
   }
 
-  requireSetup(): void {
-    const gaps = this.setupGaps()
-    if (gaps.length) {
-      throw new Error(`Setup incomplete: ${gaps.join(', ')}. Finish setup wizard / Settings.`)
-    }
+  /** Where to send the user after auth (executor pairing only). */
+  nextSetupStep(userId: string): 'executor' | null {
+    const user = this.getUser(userId)
+    if (!user) throw new Error('unauthorized')
+    const gaps = userExecutorSetupGaps(this.getUserExecutorSettings(userId))
+    if (gaps.length) return 'executor'
+    return null
+  }
+
+  nextSetupPath(userId: string): '/setup' | '/overview' {
+    return this.nextSetupStep(userId) === 'executor' ? '/setup' : '/overview'
   }
 
   userCount(): number {
@@ -174,17 +174,17 @@ export class Kernel {
 
   authPublicConfig() {
     const s = this.settings()
+    const empty = this.userCount() === 0
     return {
       authMode: s.authMode,
-      allowBootstrapRegister: s.allowBootstrapRegister && this.userCount() === 0,
+      allowBootstrapRegister: empty,
       githubOAuthConfigured: Boolean(
         (s.githubOAuthClientId || process.env.GITHUB_CLIENT_ID)?.trim(),
       ),
       githubSignupMode: s.githubSignupMode,
       userCount: this.userCount(),
-      deploymentMode: s.deploymentMode,
       authRequiredForApi: s.authRequiredForApi,
-      loginOptional: !s.authRequiredForApi || s.deploymentMode !== 'hosted',
+      loginOptional: !s.authRequiredForApi,
     }
   }
 
@@ -210,22 +210,38 @@ export class Kernel {
 
   createSession(
     ownerId: string,
-    opts?: { provider?: string; githubLogin?: string | null; accessToken?: string | null },
+    opts?: {
+      provider?: string
+      githubLogin?: string | null
+      /** Prefer storing GitHub tokens on the user row only — not on the session. */
+      accessToken?: string | null
+      /** Session lifetime; default 14d. Device-pair sessions use a shorter TTL. */
+      ttlMs?: number
+    },
   ): string {
     const token = randomUUID()
+    const now = Date.now()
+    const ttlMs = opts?.ttlMs ?? 14 * 24 * 60 * 60_000
+    const createdAt = new Date(now).toISOString()
+    const expiresAt = new Date(now + ttlMs).toISOString()
     this.deps.db
       .prepare(
-        `INSERT INTO sessions (token, owner_id, created_at, provider, github_login, access_token)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (token, owner_id, created_at, expires_at, provider, github_login, access_token)
+         VALUES (?, ?, ?, ?, ?, ?, NULL)`,
       )
       .run(
         token,
         ownerId,
-        new Date().toISOString(),
+        createdAt,
+        expiresAt,
         opts?.provider ?? 'password',
         opts?.githubLogin ?? null,
-        opts?.accessToken ?? null,
       )
+    if (opts?.accessToken?.trim()) {
+      this.deps.db
+        .prepare(`UPDATE users SET github_access_token = ?, updated_at = ? WHERE id = ?`)
+        .run(opts.accessToken.trim(), createdAt, ownerId)
+    }
     return token
   }
 
@@ -264,10 +280,10 @@ export class Kernel {
     if (!this.getUser(ownerId)) throw new Error('unauthorized')
     const kernelUrl = this.publicKernelUrl()
     const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    const bytes = randomBytes(8)
+    const bytes = randomBytes(16)
     let raw = ''
-    for (let i = 0; i < 8; i++) raw += alphabet[bytes[i]! % alphabet.length]
-    const code = `${raw.slice(0, 4)}-${raw.slice(4)}`
+    for (let i = 0; i < 12; i++) raw += alphabet[bytes[i]! % alphabet.length]
+    const code = `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8)}`
     const createdAt = new Date().toISOString()
     const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
     this.deps.db
@@ -344,7 +360,7 @@ export class Kernel {
    */
   claimDevicePair(codeRaw: string): { url: string; token: string; expiresAt: string } {
     const code = codeRaw.trim().toUpperCase().replace(/\s+/g, '')
-    if (!/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(code)) {
+    if (!/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(code)) {
       throw new Error('invalid pairing code')
     }
     const row = this.deps.db
@@ -358,7 +374,10 @@ export class Kernel {
     if (row.claimed_at) throw new Error('pairing code already used')
     if (Date.parse(row.expires_at) <= Date.now()) throw new Error('pairing code expired')
     if (!this.getUser(row.owner_id)) throw new Error('pairing code unknown')
-    const token = this.createSession(row.owner_id, { provider: 'device_pair' })
+    const token = this.createSession(row.owner_id, {
+      provider: 'device_pair',
+      ttlMs: 24 * 60 * 60_000,
+    })
     const claimedAt = new Date().toISOString()
     const updated = this.deps.db
       .prepare(
@@ -369,17 +388,97 @@ export class Kernel {
     if (updated.changes !== 1) throw new Error('pairing code already used')
     this.markExecutorPaired(row.owner_id)
     this.touchExecutorHeartbeat(row.owner_id, 'device_pair')
-    return { url: this.publicKernelUrl(), token, expiresAt: row.expires_at }
+    const sessionExpires = this.deps.db
+      .prepare(`SELECT expires_at FROM sessions WHERE token = ?`)
+      .get(token) as { expires_at: string | null } | undefined
+    return {
+      url: this.publicKernelUrl(),
+      token,
+      expiresAt: sessionExpires?.expires_at ?? row.expires_at,
+    }
   }
 
-  /** Mark BYO executor as paired (setup gap closes). Default operator chat → executor. */
+  /** Mark BYO executor as paired (setup gap closes). Only via claimDevicePair. */
   markExecutorPaired(ownerId: string): void {
     const cur = this.getUserExecutorSettings(ownerId)
     if (cur.executorPaired) return
-    this.putUserExecutorSettings(ownerId, {
+    const next = normalizeUserExecutorSettings({
+      ...cur,
       executorPaired: true,
-      operatorLlm: cur.operatorLlm,
+      operatorLlm: cur.operatorLlm === 'gateway' ? 'gateway' : 'executor',
     })
+    this.deps.db
+      .prepare(
+        `INSERT INTO user_settings (user_id, doc_json, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET doc_json = excluded.doc_json, updated_at = excluded.updated_at`,
+      )
+      .run(ownerId, JSON.stringify(next), new Date().toISOString())
+  }
+
+  revokeSession(token: string): void {
+    this.deps.db.prepare(`DELETE FROM sessions WHERE token = ?`).run(token)
+  }
+
+  /**
+   * Absolute http(s) GateWay base URL. Blocks cloud metadata / link-local SSRF targets.
+   * Hosted/hybrid also blocks loopback and RFC1918 (no shared-network SSRF).
+   */
+  private assertSafeGatewayUrl(raw: string): string {
+    let u: URL
+    try {
+      u = new URL(raw)
+    } catch {
+      throw new Error('gatewayUrl must be an absolute http(s) URL')
+    }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      throw new Error('gatewayUrl must use http or https')
+    }
+    const host = u.hostname.toLowerCase()
+    if (
+      host === '169.254.169.254' ||
+      host === 'metadata.google.internal' ||
+      host === 'metadata' ||
+      host.endsWith('.metadata.google.internal')
+    ) {
+      throw new Error('gatewayUrl host not allowed')
+    }
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host === '0.0.0.0' ||
+      host === 'host.docker.internal'
+    ) {
+      throw new Error('gatewayUrl must not target loopback/internal hosts')
+    }
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+    if (m) {
+      const a = Number(m[1])
+      const b = Number(m[2])
+      const privateIp =
+        a === 10 ||
+        a === 127 ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 169 && b === 254)
+      if (privateIp) {
+        throw new Error('gatewayUrl must not target private IP ranges')
+      }
+    }
+    return u.toString().replace(/\/$/, '')
+  }
+
+  private resolveLawpackRel(packRoot: string, rel: string): string {
+    const cleaned = rel.trim().replace(/^\/+/, '').replace(/\\/g, '/')
+    if (!cleaned || cleaned.includes('..')) {
+      throw new Error('lawpack relative path must not contain ..')
+    }
+    const pack = resolve(packRoot)
+    const abs = resolve(pack, cleaned)
+    if (abs !== pack && !abs.startsWith(`${pack}/`)) {
+      throw new Error('lawpack path escape blocked')
+    }
+    return abs
   }
 
   touchExecutorHeartbeat(ownerId: string, deviceLabel?: string): void {
@@ -407,10 +506,15 @@ export class Kernel {
 
   ownerFromToken(token: string | undefined | null): string | null {
     if (!token) return null
-    const row = this.deps.db.prepare(`SELECT owner_id FROM sessions WHERE token = ?`).get(token) as
-      | { owner_id: string }
-      | undefined
-    return row?.owner_id ?? null
+    const row = this.deps.db
+      .prepare(`SELECT owner_id, expires_at FROM sessions WHERE token = ?`)
+      .get(token) as { owner_id: string; expires_at: string | null } | undefined
+    if (!row) return null
+    if (row.expires_at && Date.parse(row.expires_at) <= Date.now()) {
+      this.deps.db.prepare(`DELETE FROM sessions WHERE token = ?`).run(token)
+      return null
+    }
+    return row.owner_id
   }
 
   sessionInfo(token: string | undefined | null): {
@@ -421,6 +525,7 @@ export class Kernel {
     role: string | null
   } | null {
     if (!token) return null
+    if (!this.ownerFromToken(token)) return null
     const row = this.deps.db
       .prepare(`SELECT owner_id, provider, github_login FROM sessions WHERE token = ?`)
       .get(token) as
@@ -439,11 +544,6 @@ export class Kernel {
   }
 
   private accessTokenFor(sessionToken: string | undefined | null): string | null {
-    if (!sessionToken) return null
-    const row = this.deps.db
-      .prepare(`SELECT access_token FROM sessions WHERE token = ?`)
-      .get(sessionToken) as { access_token: string | null } | undefined
-    if (row?.access_token) return row.access_token
     const owner = this.ownerFromToken(sessionToken)
     if (!owner) return null
     return this.getUser(owner)?.githubAccessToken ?? null
@@ -455,7 +555,9 @@ export class Kernel {
       githubLogin: user.githubLogin,
       accessToken: accessToken ?? user.githubAccessToken,
     })
-    const gaps = this.setupGapsForUser(user.id)
+    const executorGaps = this.setupGapsForUser(user.id)
+    const nextSetup = this.nextSetupStep(user.id)
+    const nextPath = this.nextSetupPath(user.id)
     return {
       token,
       ownerId: user.id,
@@ -463,8 +565,11 @@ export class Kernel {
       role: user.role,
       githubLogin: user.githubLogin,
       provider,
-      setupRequired: gaps.length > 0,
-      setupGaps: gaps,
+      executorSetupRequired: nextSetup === 'executor',
+      setupRequired: nextSetup === 'executor',
+      setupGaps: executorGaps,
+      nextSetup,
+      nextPath,
     }
   }
 
@@ -486,28 +591,36 @@ export class Kernel {
     if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
       throw new Error('username must be 3–32 chars [a-zA-Z0-9_.-]')
     }
-    const count = this.userCount()
-    const s = this.settings()
-    if (count === 0) {
-      if (!s.allowBootstrapRegister && !input.bootstrap) {
-        throw new Error('bootstrap register disabled')
-      }
-    } else if (input.bootstrap) {
-      throw new Error('bootstrap only when no users exist')
-    } else {
-      throw new Error('registration closed — ask an admin (use GitHub login or admin invite later)')
-    }
-    if (this.getUserByUsername(username)) throw new Error('username taken')
     const id = randomUUID()
     const now = new Date().toISOString()
-    const role = count === 0 ? 'admin' : (input.role ?? 'operator')
-    this.deps.db
-      .prepare(
-        `INSERT INTO users (id, username, password_hash, github_id, github_login, github_access_token, role, created_at, updated_at)
-         VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
-      )
-      .run(id, username, hashPassword(input.password), role, now, now)
-    this.ensureUserSettings(id)
+    this.deps.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (this.getUserByUsername(username)) throw new Error('username taken')
+      const countNow = this.userCount()
+      if (countNow === 0) {
+        // First admin on empty host — always allowed.
+      } else if (input.bootstrap) {
+        throw new Error('bootstrap only when no users exist')
+      } else {
+        throw new Error('registration closed — ask an admin (use GitHub login or admin invite later)')
+      }
+      const role = countNow === 0 ? 'admin' : (input.role ?? 'operator')
+      this.deps.db
+        .prepare(
+          `INSERT INTO users (id, username, password_hash, github_id, github_login, github_access_token, role, created_at, updated_at)
+           VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+        )
+        .run(id, username, hashPassword(input.password), role, now, now)
+      this.ensureUserSettings(id)
+      this.deps.db.exec('COMMIT')
+    } catch (e) {
+      try {
+        this.deps.db.exec('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw e
+    }
     const user = this.getUser(id)!
     return this.authLoginResult(user, 'password')
   }
@@ -535,23 +648,12 @@ export class Kernel {
         .run(me.login, accessToken, now, existing.id)
       return this.getUser(String(existing.id))!
     }
-    const byName = this.getUserByUsername(me.login)
-    if (byName) {
-      this.deps.db
-        .prepare(
-          `UPDATE users SET github_id = ?, github_login = ?, github_access_token = ?, updated_at = ? WHERE id = ?`,
-        )
-        .run(githubId, me.login, accessToken, now, byName.id)
-      return this.getUser(byName.id)!
-    }
-
+    // Never auto-link by username — that enables account takeover via matching GitHub login.
     // New account — gated by githubSignupMode (default closed).
     const count = this.userCount()
     const s = this.settings()
     if (count === 0) {
-      if (!s.allowBootstrapRegister) {
-        throw new Error('bootstrap register disabled — create the first admin another way')
-      }
+      // First admin on empty host — always allowed.
     } else if (s.githubSignupMode === 'closed') {
       throw new Error(
         'GitHub signup closed — existing accounts may log in; ask an admin to open signup or add an allowlist',
@@ -588,16 +690,22 @@ export class Kernel {
     return this.authLoginResult(user, 'github', pat)
   }
 
-  githubOAuthStartUrl(): { url: string; state: string } {
+  githubOAuthStartUrl(redirectUri?: string | null): { url: string; state: string } {
     const s = this.settings()
     const clientId =
       s.githubOAuthClientId?.trim() || process.env.GITHUB_CLIENT_ID?.trim() || null
     const redirect =
+      redirectUri?.trim() ||
       s.githubOAuthRedirectUri?.trim() ||
       process.env.GITHUB_REDIRECT_URI?.trim() ||
-      'http://127.0.0.1:8787/api/auth/github/callback'
+      null
     if (!clientId) {
       throw new Error('GitHub OAuth not configured — set githubOAuthClientId / GITHUB_CLIENT_ID')
+    }
+    if (!redirect) {
+      throw new Error(
+        'GitHub OAuth redirect URI missing — pass request origin or set GITHUB_REDIRECT_URI',
+      )
     }
     const state = randomUUID()
     this.deps.db
@@ -605,7 +713,10 @@ export class Kernel {
         `INSERT INTO kv (key, value) VALUES (?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       )
-      .run(`oauth_state:${state}`, String(Date.now()))
+      .run(
+        `oauth_state:${state}`,
+        JSON.stringify({ at: Date.now(), redirect }),
+      )
     return { url: GitHubClient.oauthAuthorizeUrl(clientId, redirect, state), state }
   }
 
@@ -614,6 +725,21 @@ export class Kernel {
       | { value: string }
       | undefined
     if (!st) throw new Error('invalid OAuth state')
+    let at = Number.NaN
+    let redirectFromState: string | null = null
+    try {
+      const parsed = JSON.parse(st.value) as { at?: number; redirect?: string }
+      if (typeof parsed.at === 'number') at = parsed.at
+      if (typeof parsed.redirect === 'string' && parsed.redirect.trim()) {
+        redirectFromState = parsed.redirect.trim()
+      }
+    } catch {
+      at = Number(st.value)
+    }
+    if (!Number.isFinite(at) || Date.now() - at > 10 * 60_000) {
+      this.deps.db.prepare(`DELETE FROM kv WHERE key = ?`).run(`oauth_state:${state}`)
+      throw new Error('OAuth state expired')
+    }
     this.deps.db.prepare(`DELETE FROM kv WHERE key = ?`).run(`oauth_state:${state}`)
     const s = this.settings()
     const clientId =
@@ -621,10 +747,14 @@ export class Kernel {
     const clientSecret =
       s.githubOAuthClientSecret?.trim() || process.env.GITHUB_CLIENT_SECRET?.trim() || ''
     const redirect =
+      redirectFromState ||
       s.githubOAuthRedirectUri?.trim() ||
       process.env.GITHUB_REDIRECT_URI?.trim() ||
-      'http://127.0.0.1:8787/api/auth/github/callback'
+      ''
     if (!clientId || !clientSecret) throw new Error('GitHub OAuth client id/secret missing')
+    if (!redirect) {
+      throw new Error('GitHub OAuth redirect URI missing for code exchange')
+    }
     const tok = await GitHubClient.exchangeOAuthCode({
       clientId,
       clientSecret,
@@ -658,7 +788,10 @@ export class Kernel {
     patch: Partial<UserExecutorSettings>,
   ): UserExecutorSettings {
     const cur = this.getUserExecutorSettings(userId)
-    const next = normalizeUserExecutorSettings({ ...cur, ...patch })
+    // executorPaired is set only by claimDevicePair / markExecutorPaired — never client mass-assign.
+    const { executorPaired: _pairIgnored, ...rest } = patch
+    void _pairIgnored
+    const next = normalizeUserExecutorSettings({ ...cur, ...rest, executorPaired: cur.executorPaired })
     if (next.operatorLlm === 'gateway') {
       if (!next.gatewayUrl?.trim()) {
         throw new Error('operatorLlm=gateway requires gatewayUrl')
@@ -666,6 +799,9 @@ export class Kernel {
       if (!next.gatewayApiKey?.trim()) {
         throw new Error('operatorLlm=gateway requires gatewayApiKey')
       }
+      this.assertSafeGatewayUrl(next.gatewayUrl.trim())
+    } else if (next.gatewayUrl?.trim()) {
+      this.assertSafeGatewayUrl(next.gatewayUrl.trim())
     }
     this.deps.db
       .prepare(
@@ -691,10 +827,10 @@ export class Kernel {
       wssConnected: executorDeviceHub.hasLive(userId),
       heartbeat: this.executorHeartbeat(userId),
       notes: [
-        'Install agent-kernel-mcp on your DSH (Windows / macOS / Linux).',
-        'Pair with a one-time code in the DSH Session Header → Agent Kernel.',
-        'DSH opens outbound WSS to this kernel (/api/executor/ws). No VPN, no open ports on your PC.',
-        'MCP tools stay separate (stdio → HTTPS). Control plane is WSS only.',
+        'Same pair for every executor: agent-kernel-runner pair --url <kernel> --code <XXXX-XXXX-XXXX>',
+        'Then keep agent-kernel-runner running (outbound WSS). DSH Header pair still works too.',
+        'MCP tools: install the same stdio server in Claude / Aider / OpenCode / DSH (examples/print-mcp-configs.sh).',
+        'Coding jobs use brief.executorId (dsh | claude-code | aider | opencode). Control plane is WSS only.',
       ],
     }
   }
@@ -703,115 +839,19 @@ export class Kernel {
     return this.deps.projects.listByOwner(ownerId)
   }
 
-  scanLocalProjects(ownerId: string, rootPath: string) {
-    const found = scanLocalGitRoots(rootPath)
-    return registerScanResults(this.deps.projects, ownerId, found)
-  }
-
-  async importGithubProjects(
-    sessionToken: string,
-    opts: {
-      visibility: 'all' | 'public'
-      login?: string
-      clone?: boolean
-      analyze?: boolean
-      maxRepos?: number
-    },
-  ) {
-    const info = this.sessionInfo(sessionToken)
-    if (!info) throw new Error('unauthorized')
-    const token = this.accessTokenFor(sessionToken)
-    if (!token) {
-      throw new Error('GitHub session required — login via GitHub (PAT or OAuth)')
-    }
-    const s = this.settings()
-    const cloneRoot =
-      s.githubCloneRoot?.trim() ||
-      join(s.workspaceRoot ?? join(this.deps.repoRoot, 'data', 'github-clones'))
-    let repos = await fetchGithubReposForImport(token, {
-      visibility: opts.visibility,
-      login: opts.login ?? s.githubDefaultLogin ?? undefined,
-    })
-    if (opts.visibility === 'all') {
-      // keep private + public owned
-    } else {
-      repos = repos.filter((r) => !r.private)
-    }
-    if (opts.maxRepos && opts.maxRepos > 0) {
-      repos = repos.slice(0, opts.maxRepos)
-    }
-    const registered = []
-    const skipped = []
-    const analyzed = []
-    for (const repo of repos) {
-      try {
-        let localPath: string
-        if (opts.clone !== false) {
-          localPath = cloneGithubRepo({ repo, cloneRoot, token })
-        } else {
-          localPath = join(cloneRoot, repo.name)
-          if (!existsSync(localPath)) {
-            skipped.push({ name: repo.full_name, reason: 'not_cloned' })
-            continue
-          }
-        }
-        const existing = this.deps.projects
-          .listByOwner(info.ownerId)
-          .find((p) => p.localPath === localPath || p.gitRemote === repo.clone_url)
-        let project = existing
-        if (!project) {
-          project = this.deps.projects.create({
-            id: randomUUID(),
-            ownerId: info.ownerId,
-            name: repo.name,
-            localPath,
-            gitRemote: repo.clone_url,
-            now: new Date().toISOString(),
-          })
-          registered.push(project)
-        } else {
-          skipped.push({ name: repo.full_name, reason: 'already_registered' })
-        }
-        if (opts.analyze !== false && project) {
-          analyzed.push(this.analyze(project.id))
-        }
-      } catch (e) {
-        skipped.push({
-          name: repo.full_name,
-          reason: e instanceof Error ? e.message : String(e),
-        })
-      }
-    }
-    return {
-      visibility: opts.visibility,
-      repoCount: repos.length,
-      registered: registered.map((p) => p.id),
-      analyzed: analyzed.map((p) => p.id),
-      skipped,
-    }
-  }
-
-  analyzeMany(projectIds: string[]) {
-    return projectIds.map((id) => this.analyze(id))
-  }
-
-  getProject(id: string): Project | null {
-    return this.deps.projects.getById(id)
-  }
-
   registerProject(
     ownerId: string,
     input: { name: string; localPath?: string; path?: string; gitRemote?: string | null },
   ): Project {
-    const localPath = input.localPath ?? input.path
-    if (!localPath) throw new Error('path / localPath required')
-    const abs = resolve(localPath)
-    if (!existsSync(abs)) throw new Error(`path does not exist: ${abs}`)
+    const raw = (input.localPath ?? input.path)?.trim()
+    if (!raw) throw new Error('path / localPath required')
+    if (raw.includes('\0') || raw.length > 4096) throw new Error('invalid path')
+    // Opaque executor workdir — kernel never existsSync / resolves host FS.
     return this.deps.projects.create({
       id: randomUUID(),
       ownerId,
       name: input.name,
-      localPath: abs,
+      localPath: raw,
       gitRemote: input.gitRemote ?? null,
       now: new Date().toISOString(),
     })
@@ -889,10 +929,13 @@ export class Kernel {
     const rolePath = input.rolePath.trim().replace(/^\/+/, '')
     if (!rolePath) throw new Error('rolePath required')
     const pack = this.lawpackRoot(this.settings())
-    const roleAbs = join(pack, rolePath)
+    const roleAbs = this.resolveLawpackRel(pack, rolePath)
     if (!existsSync(roleAbs)) throw new Error(`role file missing: ${roleAbs}`)
     if (input.overlay) {
-      const overlayAbs = join(pack, 'profiles', `${input.overlay}.md`)
+      if (String(input.overlay).includes('..') || String(input.overlay).includes('/')) {
+        throw new Error('overlay id must be a simple name')
+      }
+      const overlayAbs = this.resolveLawpackRel(pack, `profiles/${input.overlay}.md`)
       if (!existsSync(overlayAbs)) throw new Error(`overlay missing: ${overlayAbs}`)
     }
     const schedule = input.defaultScheduleMode ?? 'manual'
@@ -937,11 +980,16 @@ export class Kernel {
         ? patch.rolePath.trim().replace(/^\/+/, '')
         : String(cur.role_path)
     if (!rolePath) throw new Error('rolePath required')
-    if (!existsSync(join(pack, rolePath))) throw new Error(`role file missing: ${join(pack, rolePath)}`)
+    if (!existsSync(this.resolveLawpackRel(pack, rolePath))) {
+      throw new Error(`role file missing: ${join(pack, rolePath)}`)
+    }
     const overlay =
       patch.overlay !== undefined ? patch.overlay : (cur.lawpack_profile_overlay as string | null)
     if (overlay) {
-      const overlayAbs = join(pack, 'profiles', `${overlay}.md`)
+      if (String(overlay).includes('..') || String(overlay).includes('/')) {
+        throw new Error('overlay id must be a simple name')
+      }
+      const overlayAbs = this.resolveLawpackRel(pack, `profiles/${overlay}.md`)
       if (!existsSync(overlayAbs)) throw new Error(`overlay missing: ${overlayAbs}`)
     }
     const schedule = patch.defaultScheduleMode ?? String(cur.default_schedule_mode)
@@ -1013,38 +1061,8 @@ export class Kernel {
     }
   }
 
-  sniff(projectId: string): Project {
-    const p = this.requireProject(projectId)
-    const root = p.localPath
-    const meta: Record<string, unknown> = {
-      sniffedAt: new Date().toISOString(),
-      hasPackageJson: existsSync(join(root, 'package.json')),
-      hasCi: existsSync(join(root, '.github', 'workflows')),
-      suggestedProfileId: this.settings().defaultProfileId,
-      gateCommand: existsSync(join(root, 'package.json')) ? 'pnpm gate' : null,
-    }
-    if (meta.hasPackageJson) {
-      try {
-        const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
-          packageManager?: string
-          scripts?: Record<string, string>
-        }
-        meta.packageManager = pkg.packageManager?.split('@')[0] ?? 'npm'
-        if (pkg.scripts?.gate) meta.gateCommand = 'pnpm gate'
-        else if (pkg.scripts?.test) meta.gateCommand = 'pnpm test'
-      } catch {
-        /* keep */
-      }
-    }
-    const next = {
-      ...p,
-      meta: { ...p.meta, ...meta },
-      updatedAt: new Date().toISOString(),
-    }
-    return this.deps.projects.update(next)
-  }
-
-  initPreview(projectId: string, body: Record<string, unknown>) {
+  initPreview(ownerId: string, projectId: string, body: Record<string, unknown>) {
+    this.requireProject(projectId, ownerId)
     const s = this.settings()
     const preset = String(body.presetId ?? s.defaultPresetId) as
       | 'clean'
@@ -1075,46 +1093,13 @@ export class Kernel {
     }
   }
 
-  initApply(projectId: string, body: Record<string, unknown>): Project {
-    const plan = this.initPreview(projectId, body)
-    const p = this.requireProject(projectId)
+  initApply(ownerId: string, projectId: string, body: Record<string, unknown>): Project {
+    // DB-only: status + assignment. Executor plants workdir files later (see plannedFiles).
+    const plan = this.initPreview(ownerId, projectId, body)
+    const p = this.requireProject(projectId, ownerId)
     const s = this.settings()
-    const work = p.localPath
-
-    if (plan.injectionMode === 'repo_plant') {
-      this.plantLawpack(work, s)
-    }
-    if (plan.createTrackingFiles && plan.injectStrength !== 'strict') {
-      this.ensureFile(
-        join(work, s.layoutPaths.progress ?? 'PROGRESS.md'),
-        `# PROGRESS\n\n## NOW\n\n- RUN_ID: (set on first assignment)\n- phase: initialized\n`,
-      )
-      this.ensureFile(
-        join(work, s.layoutPaths.bugs ?? 'BUGS.md'),
-        `# BUGS\n\n## Open\n\n## Fixed\n`,
-      )
-      this.ensureFile(
-        join(work, s.layoutPaths.adapter ?? 'ADAPTER.md'),
-        `# ADAPTER\n\ngate: ${(p.meta.gateCommand as string) ?? 'pnpm test'}\n`,
-      )
-    }
-    if (plan.createAgentsMd) {
-      const agents = join(work, s.layoutPaths.agentsMd ?? 'AGENTS.md')
-      if (plan.injectionMode === 'repo_plant') {
-        this.ensureFile(
-          agents,
-          `# AGENTS\n\nObey vendor/lawpack/LAWS.md (or planted lawpack). RUN_ID from PROGRESS.\n`,
-        )
-      } else {
-        this.ensureFile(
-          agents,
-          `# AGENTS\n\nLaws arrive via agent-kernel harness_inject for this project. Obey Session Brief / ephemeral lawpack.\n`,
-        )
-      }
-    }
 
     if (s.installProtectHooks && s.gitPolicyEnabled) {
-      // only when both flags on — still requires pack scripts; no silent install if pack lacks feature
       const pack = this.lawpackRoot(s)
       const manifestPath = join(pack, 'MANIFEST.json')
       if (!existsSync(manifestPath)) {
@@ -1126,7 +1111,6 @@ export class Kernel {
       if (!manifest.features?.includes('protect_scripts')) {
         throw new Error('installProtectHooks set but pack features omit protect_scripts')
       }
-      // Hook install left to explicit future path — refuse silent partial install
       throw new Error(
         'installProtectHooks=true requires explicit hook installer (not silent). Disable flag or wait for hook installer implementation.',
       )
@@ -1193,57 +1177,54 @@ export class Kernel {
     return `${j.id ?? 'lawpack'}@${j.version ?? 'unknown'}`
   }
 
-  private plantLawpack(work: string, s: AgentKernelSettings): void {
-    const src = this.lawpackRoot(s)
-    const dest = join(work, 'vendor', 'lawpack')
-    mkdirSync(dest, { recursive: true })
-    // shallow copy essential files
-    for (const rel of ['MANIFEST.json', 'LAWS.md', 'OWNED_PATHS.md', 'RUNTIME.md']) {
-      const from = join(src, rel)
-      if (existsSync(from)) writeFileSync(join(dest, rel), readFileSync(from))
-    }
-    this.copyDir(join(src, 'roles'), join(dest, 'roles'))
-    writeFileSync(join(dest, 'LAWPACK_VERSION'), this.readLawpackVersion())
-  }
-
-  private copyDir(from: string, to: string): void {
-    if (!existsSync(from)) return
-    mkdirSync(to, { recursive: true })
-    for (const name of readdirSync(from)) {
-      const a = join(from, name)
-      const b = join(to, name)
-      if (statSync(a).isDirectory()) this.copyDir(a, b)
-      else writeFileSync(b, readFileSync(a))
-    }
-  }
-
-  private ensureFile(path: string, content: string): void {
-    if (existsSync(path)) return
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, content)
-  }
-
-  requireProject(id: string): Project {
+  requireProject(id: string, ownerId: string): Project {
     const p = this.deps.projects.getById(id)
-    if (!p) throw new Error(`project not found: ${id}`)
+    if (!p || p.ownerId !== ownerId) throw new Error(`project not found: ${id}`)
     return p
   }
 
-  listAssignments(projectId: string | null) {
+  getProject(ownerId: string, id: string): Project | null {
+    const p = this.deps.projects.getById(id)
+    if (!p || p.ownerId !== ownerId) return null
+    return p
+  }
+
+  listAssignments(ownerId: string, projectId: string | null) {
     if (projectId) {
+      this.requireProject(projectId, ownerId)
       return this.deps.db
-        .prepare(`SELECT * FROM assignments WHERE project_id = ? ORDER BY created_at DESC`)
-        .all(projectId)
+        .prepare(
+          `SELECT * FROM assignments WHERE project_id = ? AND owner_id = ? ORDER BY created_at DESC`,
+        )
+        .all(projectId, ownerId)
     }
     return this.deps.db
-      .prepare(`SELECT * FROM assignments WHERE project_id IS NULL ORDER BY created_at DESC`)
-      .all()
+      .prepare(
+        `SELECT * FROM assignments WHERE owner_id = ? AND project_id IS NULL ORDER BY created_at DESC`,
+      )
+      .all(ownerId)
   }
 
   getAssignment(id: string) {
     return this.deps.db.prepare(`SELECT * FROM assignments WHERE id = ?`).get(id) as
       | Record<string, unknown>
       | undefined
+  }
+
+  requireAssignment(id: string, ownerId: string): Record<string, unknown> {
+    const a = this.getAssignment(id)
+    if (!a || String(a.owner_id) !== ownerId) throw new Error(`assignment not found: ${id}`)
+    return a
+  }
+
+  requireRun(id: string, ownerId: string): Record<string, unknown> {
+    const run = this.deps.db.prepare(`SELECT * FROM runs WHERE id = ?`).get(id) as
+      | Record<string, unknown>
+      | undefined
+    if (!run) throw new Error(`run not found: ${id}`)
+    const a = this.getAssignment(String(run.assignment_id))
+    if (!a || String(a.owner_id) !== ownerId) throw new Error(`run not found: ${id}`)
+    return run
   }
 
   createAssignment(input: {
@@ -1268,7 +1249,7 @@ export class Kernel {
     if (input.scheduleMode === 'cron' && !String(input.cronExpr ?? '').trim()) {
       throw new Error('cron scheduleMode requires cronExpr')
     }
-    if (input.projectId) this.requireProject(input.projectId)
+    if (input.projectId) this.requireProject(input.projectId, input.ownerId)
     const id = randomUUID()
     const now = new Date().toISOString()
     const s = this.settings()
@@ -1298,6 +1279,7 @@ export class Kernel {
   }
 
   patchAssignment(
+    ownerId: string,
     id: string,
     patch: {
       paused?: boolean
@@ -1310,8 +1292,7 @@ export class Kernel {
       executorId?: string | null
     },
   ) {
-    const cur = this.getAssignment(id)
-    if (!cur) throw new Error(`assignment not found: ${id}`)
+    const cur = this.requireAssignment(id, ownerId)
     if (patch.profileId && !this.getProfile(patch.profileId)) {
       throw new Error(`profile not found: ${patch.profileId}`)
     }
@@ -1365,16 +1346,14 @@ export class Kernel {
     return this.getAssignment(id)
   }
 
-  deleteAssignment(id: string) {
-    const cur = this.getAssignment(id)
-    if (!cur) throw new Error(`assignment not found: ${id}`)
+  deleteAssignment(ownerId: string, id: string) {
+    this.requireAssignment(id, ownerId)
     this.deps.db.prepare(`DELETE FROM assignments WHERE id = ?`).run(id)
     return { ok: true as const, id }
   }
 
-  resolveFanOutTargets(assignmentId: string): { projectIds: string[]; skipped: { id: string; reason: string }[] } {
-    const a = this.getAssignment(assignmentId)
-    if (!a) throw new Error(`assignment not found: ${assignmentId}`)
+  resolveFanOutTargets(ownerId: string, assignmentId: string): { projectIds: string[]; skipped: { id: string; reason: string }[] } {
+    const a = this.requireAssignment(assignmentId, ownerId)
     if (a.project_id) {
       return { projectIds: [String(a.project_id)], skipped: [] }
     }
@@ -1409,23 +1388,18 @@ export class Kernel {
         skipped.push({ id: p.id, reason: 'uninitialized' })
         continue
       }
-      if (!existsSync(p.localPath)) {
-        skipped.push({ id: p.id, reason: 'path_missing' })
-        continue
-      }
       projectIds.push(p.id)
     }
     return { projectIds, skipped }
   }
 
-  buildBrief(assignmentId: string, projectIdOverride?: string): SessionBrief {
-    const a = this.getAssignment(assignmentId)
-    if (!a) throw new Error(`assignment not found: ${assignmentId}`)
+  buildBrief(ownerId: string, assignmentId: string, projectIdOverride?: string): SessionBrief {
+    const a = this.requireAssignment(assignmentId, ownerId)
     const projectId = projectIdOverride ?? (a.project_id as string | null)
     if (!projectId) {
       throw new Error('brief requires projectId (use fan-out targets for global assignments)')
     }
-    const p = this.requireProject(projectId)
+    const p = this.requireProject(projectId, ownerId)
     const profile = this.deps.db.prepare(`SELECT * FROM profiles WHERE id = ?`).get(a.profile_id) as
       | Record<string, unknown>
       | undefined
@@ -1433,11 +1407,11 @@ export class Kernel {
     const s = this.settings()
     const pack = this.lawpackRoot(s)
     const rolePath = String(profile.role_path)
-    const roleAbs = join(pack, rolePath)
+    const roleAbs = this.resolveLawpackRel(pack, rolePath)
     if (!existsSync(roleAbs)) throw new Error(`role file missing: ${roleAbs}`)
     let roleText = readFileSync(roleAbs, 'utf8')
     const overlay = profile.lawpack_profile_overlay
-      ? join(pack, 'profiles', `${profile.lawpack_profile_overlay}.md`)
+      ? this.resolveLawpackRel(pack, `profiles/${profile.lawpack_profile_overlay}.md`)
       : null
     if (overlay && existsSync(overlay)) {
       roleText = `${roleText}\n\n---\n# Overlay\n\n${readFileSync(overlay, 'utf8')}`
@@ -1452,14 +1426,6 @@ export class Kernel {
       )
 
     let executorCwd: string | null = null
-    if (
-      s.dshWorkdirHostPrefix &&
-      s.dshWorkdirContainerPrefix &&
-      p.localPath.startsWith(s.dshWorkdirHostPrefix)
-    ) {
-      executorCwd =
-        s.dshWorkdirContainerPrefix + p.localPath.slice(s.dshWorkdirHostPrefix.length)
-    }
 
     return {
       projectId: p.id,
@@ -1492,22 +1458,25 @@ export class Kernel {
     paired: boolean
     lastSeenAt: string | null
     wssConnected: boolean
+    executorId: string
   }> {
     const s = this.getUserExecutorSettings(ownerId)
-    if (s.executorId !== 'dsh') {
-      throw new Error(`test-dsh only applies to executorId=dsh (got ${s.executorId})`)
-    }
     if (!s.executorPaired) {
-      throw new Error('DSH not paired — generate a code and claim it from your DSH Header')
+      throw new Error('Executor not paired — generate a code and claim it from your device')
     }
     const live = executorDeviceHub.hasLive(ownerId)
     const hb = this.executorHeartbeat(ownerId)
     if (!live) {
       throw new Error(
-        'No live WSS from DSH — start DeepSeek Harness with agent-kernel-mcp (outbound /api/executor/ws)',
+        'No live WSS — start DSH with agent-kernel-mcp, or run agent-kernel-runner (Claude/Aider/OpenCode)',
       )
     }
-    return { paired: true, lastSeenAt: hb.lastSeenAt, wssConnected: true }
+    return {
+      paired: true,
+      lastSeenAt: hb.lastSeenAt,
+      wssConnected: true,
+      executorId: s.executorId,
+    }
   }
 
   private enqueueExecutorJob(
@@ -1518,7 +1487,7 @@ export class Kernel {
   ): ExecutorJobView {
     if (!executorDeviceHub.hasLive(ownerId)) {
       throw new Error(
-        'No paired DSH connected over WSS — open DSH with agent-kernel-mcp so it can receive jobs',
+        'No paired device connected over WSS — open DSH with agent-kernel-mcp, or run agent-kernel-runner',
       )
     }
     const id = randomUUID()
@@ -1545,7 +1514,7 @@ export class Kernel {
           `UPDATE executor_jobs SET status = 'failed', error_text = ?, completed_at = ? WHERE id = ?`,
         )
         .run('WSS push failed — no live device', new Date().toISOString(), id)
-      throw new Error('WSS push failed — no live DSH socket')
+      throw new Error('WSS push failed — no live device socket')
     }
     return view
   }
@@ -1632,7 +1601,7 @@ export class Kernel {
            WHERE id = ?`,
         )
         .run(err, completedAt, body.result ? JSON.stringify(body.result) : null, jobId)
-      if (!row.run_id.startsWith('operator:')) {
+      if (!row.run_id.startsWith('operator:') && !row.run_id.startsWith('detect:')) {
         this.deps.db
           .prepare(
             `UPDATE runs SET outcome = 'failed', ended_at = ?, deny_reason = ? WHERE id = ? AND outcome IN ('queued', 'waiting_executor', 'running')`,
@@ -1686,37 +1655,21 @@ export class Kernel {
       if (typeof result.reply !== 'string' || !result.reply.trim()) {
         throw new Error('operator_turn result requires non-empty reply string')
       }
+    } else if (row.kind === 'list_workdir_candidates') {
+      if (!Array.isArray(result.candidates)) {
+        throw new Error('list_workdir_candidates result requires candidates array')
+      }
     }
 
     return { runId: row.run_id, status: 'completed' }
   }
 
-  materializeInject(brief: SessionBrief): void {
+  private policyCheck(ownerId: string, brief: SessionBrief): void {
     const s = this.settings()
-    if (brief.injectionMode !== 'harness_inject') return
-    if (brief.injectMaterialization === 'dot_agent' && brief.rolePromptText) {
-      const dir = join(brief.workdir, s.layoutPaths.lawpackDir ?? '.agent/lawpack')
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(join(dir, 'INJECTED_ROLE.md'), brief.rolePromptText)
-      const gi = join(brief.workdir, '.gitignore')
-      const line = '.agent/'
-      if (existsSync(gi)) {
-        const cur = readFileSync(gi, 'utf8')
-        if (!cur.includes(line)) writeFileSync(gi, `${cur.trimEnd()}\n${line}\n`)
-      } else {
-        writeFileSync(gi, `${line}\n`)
-      }
-    }
-  }
-
-  private policyCheck(brief: SessionBrief): void {
-    const s = this.settings()
-    const p = this.requireProject(brief.projectId)
+    const p = this.requireProject(brief.projectId, ownerId)
     const decision = authorizeSessionStart({
       brief,
       projectStatus: p.status,
-      projectPathExists: existsSync(p.localPath),
-      projectLocalPath: p.localPath,
       settings: s,
     })
     assertPolicyAllowed(decision)
@@ -1729,13 +1682,8 @@ export class Kernel {
   ): Promise<SessionBrief & { reviewProposal?: string }> {
     if (brief.reviewMode !== 'llm_propose') return brief
     const ue = this.getUserExecutorSettings(ownerId)
-    const gatewayUrl = ue.gatewayUrl?.trim() || this.settings().gatewayUrl?.trim()
-    const gatewayKey =
-      ue.gatewayApiKey?.trim() ||
-      this.settings().gatewayApiKey?.trim() ||
-      (this.settings().gatewayApiKeyRef
-        ? process.env[this.settings().gatewayApiKeyRef!]
-        : undefined)
+    const gatewayUrl = ue.gatewayUrl?.trim() || null
+    const gatewayKey = ue.gatewayApiKey?.trim() || null
     if (!gatewayUrl || !gatewayKey) {
       return {
         ...brief,
@@ -1743,7 +1691,8 @@ export class Kernel {
           '(no GateWay configured — human must approve from Brief alone; set My Executor gatewayUrl to attach an LLM proposal)',
       }
     }
-    const res = await fetch(`${gatewayUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+    const safeGw = this.assertSafeGatewayUrl(gatewayUrl)
+    const res = await fetch(`${safeGw}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -1789,8 +1738,8 @@ export class Kernel {
     ownerId: string,
     promptText?: string,
   ): Promise<unknown> {
-    const brief = this.buildBrief(assignmentId, projectId)
-    this.policyCheck(brief)
+    const brief = this.buildBrief(ownerId, assignmentId, projectId)
+    this.policyCheck(ownerId, brief)
 
     // llm_propose: queue brief for human approve — do not touch executor yet.
     if (brief.reviewMode === 'llm_propose') {
@@ -1905,8 +1854,7 @@ export class Kernel {
 
   /** Approve an llm_propose run — only then ExecutorPort.start. */
   async approveRun(ownerId: string, runId: string) {
-    const run = this.getRun(runId) as Record<string, unknown> | undefined
-    if (!run) throw new Error(`run not found: ${runId}`)
+    const run = this.requireRun(runId, ownerId)
     if (String(run.outcome) !== 'awaiting_review') {
       throw new Error(`run ${runId} is not awaiting_review (got ${run.outcome})`)
     }
@@ -1915,7 +1863,7 @@ export class Kernel {
       pendingPrompt?: string | null
     }
     const { pendingPrompt, ...brief } = parsed
-    this.policyCheck(brief)
+    this.policyCheck(ownerId, brief)
     const gaps = this.setupGapsForUser(ownerId)
     if (gaps.length) {
       throw new Error(`Setup incomplete: ${gaps.join(', ')}. Finish setup / My Executor.`)
@@ -1923,9 +1871,8 @@ export class Kernel {
     return this.startExecutorRun(brief, ownerId, pendingPrompt ?? undefined, String(run.id))
   }
 
-  rejectRun(runId: string, reason?: string) {
-    const run = this.getRun(runId) as Record<string, unknown> | undefined
-    if (!run) throw new Error(`run not found: ${runId}`)
+  rejectRun(ownerId: string, runId: string, reason?: string) {
+    const run = this.requireRun(runId, ownerId)
     if (String(run.outcome) !== 'awaiting_review') {
       throw new Error(`run ${runId} is not awaiting_review`)
     }
@@ -1938,16 +1885,14 @@ export class Kernel {
     return this.getRun(runId)
   }
 
-  async nudge(assignmentId: string, promptText?: string) {
-    const a = this.getAssignment(assignmentId)
-    if (!a) throw new Error(`assignment not found: ${assignmentId}`)
-    const ownerId = String(a.owner_id)
+  async nudge(ownerId: string, assignmentId: string, promptText?: string) {
+    const a = this.requireAssignment(assignmentId, ownerId)
     const gaps = this.setupGapsForUser(ownerId)
     if (gaps.length) {
       throw new Error(`Setup incomplete: ${gaps.join(', ')}. Finish setup / My Executor.`)
     }
     if (a.paused) throw new Error('assignment is paused')
-    const { projectIds } = this.resolveFanOutTargets(assignmentId)
+    const { projectIds } = this.resolveFanOutTargets(ownerId, assignmentId)
     if (!projectIds.length) throw new Error('fan-out resolved zero projects')
     const runs = []
     for (const pid of projectIds) {
@@ -2040,88 +1985,32 @@ export class Kernel {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       )
       .run(metaKey, minuteKey)
-    await this.nudge(assignmentId, prompt)
+    const a = this.getAssignment(assignmentId)
+    if (!a) throw new Error(`assignment not found: ${assignmentId}`)
+    await this.nudge(String(a.owner_id), assignmentId, prompt)
     return true
   }
 
-  analyze(projectId: string) {
-    const p = this.sniff(projectId)
-    const root = p.localPath
-    const facts: Record<string, unknown> = {
-      ...(p.meta as Record<string, unknown>),
-      analyzedAt: new Date().toISOString(),
-      hygiene: {
-        hasReadme: existsSync(join(root, 'README.md')),
-        hasLicense: existsSync(join(root, 'LICENSE')) || existsSync(join(root, 'LICENSE.md')),
-        hasLockfile:
-          existsSync(join(root, 'pnpm-lock.yaml')) ||
-          existsSync(join(root, 'package-lock.json')) ||
-          existsSync(join(root, 'yarn.lock')),
-        hasTests:
-          existsSync(join(root, 'test')) ||
-          existsSync(join(root, 'tests')) ||
-          existsSync(join(root, '__tests__')),
-        hasProgress: existsSync(join(root, 'PROGRESS.md')),
-        hasBugs: existsSync(join(root, 'BUGS.md')),
-        hasAdapter: existsSync(join(root, 'ADAPTER.md')),
-      },
-      autonomyReady: p.status === 'initialized',
-      lawpackPin: p.lawpackVersion,
-    }
-    try {
-      const last = execSync('git log -1 --format=%cI', { cwd: root, encoding: 'utf8' }).trim()
-      facts.lastCommitAt = last
-      const days = Math.floor((Date.now() - new Date(last).getTime()) / 86400000)
-      facts.daysSinceTouch = days
-    } catch {
-      facts.git = 'unavailable'
-    }
-    let fileCount = 0
-    const walk = (dir: string, depth: number) => {
-      if (depth > 4 || fileCount > 5000) return
-      let entries: string[]
-      try {
-        entries = readdirSync(dir)
-      } catch {
-        return
-      }
-      for (const name of entries) {
-        if (name === 'node_modules' || name === '.git' || name === 'dist') continue
-        const full = join(dir, name)
-        try {
-          const st = statSync(full)
-          if (st.isDirectory()) walk(full, depth + 1)
-          else fileCount++
-        } catch {
-          /* skip */
-        }
-      }
-    }
-    walk(root, 0)
-    facts.fileCountApprox = fileCount
-    const advice: string[] = []
-    if (!facts.hygiene || !(facts.hygiene as { hasReadme: boolean }).hasReadme) {
-      advice.push('Add README.md')
-    }
-    if (p.status !== 'initialized') advice.push('Run Init')
-    if ((facts.daysSinceTouch as number | undefined) !== undefined && (facts.daysSinceTouch as number) > 90) {
-      advice.push('Stale repo — consider agent follow-up or archive tag')
-    }
-    const next = {
-      ...p,
-      meta: { ...p.meta, facts, advice, factsAt: facts.analyzedAt },
-      updatedAt: new Date().toISOString(),
-    }
-    return this.deps.projects.update(next)
-  }
-
-  listRuns(projectId?: string) {
+  listRuns(ownerId: string, projectId?: string) {
     if (projectId) {
+      this.requireProject(projectId, ownerId)
       return this.deps.db
-        .prepare(`SELECT * FROM runs WHERE project_id = ? ORDER BY started_at DESC`)
-        .all(projectId)
+        .prepare(
+          `SELECT r.* FROM runs r
+           INNER JOIN assignments a ON a.id = r.assignment_id
+           WHERE r.project_id = ? AND a.owner_id = ?
+           ORDER BY r.started_at DESC`,
+        )
+        .all(projectId, ownerId)
     }
-    return this.deps.db.prepare(`SELECT * FROM runs ORDER BY started_at DESC LIMIT 100`).all()
+    return this.deps.db
+      .prepare(
+        `SELECT r.* FROM runs r
+         INNER JOIN assignments a ON a.id = r.assignment_id
+         WHERE a.owner_id = ?
+         ORDER BY r.started_at DESC LIMIT 100`,
+      )
+      .all(ownerId)
   }
 
   getRun(id: string) {
@@ -2133,19 +2022,16 @@ export class Kernel {
    * Kernel never dials DSH.
    */
   async getRunTranscript(ownerId: string, runId: string) {
-    const run = this.getRun(runId) as
-      | {
-          id: string
-          assignment_id: string
-          project_id: string
-          executor_session_id: string | null
-          outcome: string | null
-          started_at: string
-          ended_at: string | null
-          transcript_json: string | null
-        }
-      | undefined
-    if (!run) throw new Error(`run not found: ${runId}`)
+    const run = this.requireRun(runId, ownerId) as {
+      id: string
+      assignment_id: string
+      project_id: string
+      executor_session_id: string | null
+      outcome: string | null
+      started_at: string
+      ended_at: string | null
+      transcript_json: string | null
+    }
     const sessionId = run.executor_session_id?.trim()
     if (!sessionId) {
       throw new Error(
@@ -2295,9 +2181,6 @@ export class Kernel {
       if (p.status !== 'initialized') {
         items.push({ kind: 'uninitialized', projectId: p.id, name: p.name })
       }
-      if (!existsSync(p.localPath)) {
-        items.push({ kind: 'path_missing', projectId: p.id, name: p.name, path: p.localPath })
-      }
       const advice = (p.meta.advice as string[] | undefined) ?? []
       if (advice.length) {
         items.push({ kind: 'advice', projectId: p.id, name: p.name, advice })
@@ -2372,21 +2255,16 @@ export class Kernel {
       case 'get_attention':
         return this.attention(scope.ownerId)
       case 'list_assignments':
-        return this.listAssignments(call.projectId ?? scope.projectId ?? null)
+        return this.listAssignments(scope.ownerId, call.projectId ?? scope.projectId ?? null)
       case 'brief_preview':
         if (!call.assignmentId) throw new Error('assignmentId required')
-        return this.buildBrief(call.assignmentId, call.projectId)
+        return this.buildBrief(scope.ownerId, call.assignmentId, call.projectId)
       case 'preview_fanout_targets':
         if (!call.assignmentId) throw new Error('assignmentId required')
-        return this.resolveFanOutTargets(call.assignmentId)
+        return this.resolveFanOutTargets(scope.ownerId, call.assignmentId)
       case 'nudge_run':
         if (!call.assignmentId) throw new Error('assignmentId required')
-        return this.nudge(call.assignmentId, call.text)
-      case 'analyze_project': {
-        const pid = call.projectId ?? scope.projectId
-        if (!pid) throw new Error('projectId required')
-        return this.analyze(pid)
-      }
+        return this.nudge(scope.ownerId, call.assignmentId, call.text)
       case 'create_assignment':
         return this.createAssignment({
           ownerId: scope.ownerId,
@@ -2399,6 +2277,76 @@ export class Kernel {
         })
       default:
         throw new Error(`unknown tool: ${call.tool}`)
+    }
+  }
+
+  /** Ask the paired device for workdir candidates (no kernel filesystem access). */
+  async detectWorkdirCandidates(ownerId: string): Promise<{
+    candidates: DeviceWorkdirCandidate[]
+    detectRoots: string[]
+  }> {
+    if (!this.getUser(ownerId)) throw new Error('unauthorized')
+    const s = this.getUserExecutorSettings(ownerId)
+    if (!s.executorPaired) {
+      throw new Error('Pair your executor first — detect runs on the device over WSS')
+    }
+    if (!executorDeviceHub.hasLive(ownerId)) {
+      throw new Error('No live WSS — start agent-kernel-runner (or DSH) to detect workdirs')
+    }
+    const detectRoots = s.detectRoots
+    const runId = `detect:${randomUUID()}`
+    const job = this.enqueueExecutorJob(ownerId, runId, 'list_workdir_candidates', {
+      roots: detectRoots,
+    })
+    const result = await this.waitExecutorJobResult(ownerId, job.id, 30_000)
+    const raw = result.candidates
+    if (!Array.isArray(raw)) {
+      throw new Error('list_workdir_candidates returned no candidates array')
+    }
+    const candidates: DeviceWorkdirCandidate[] = []
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue
+      const rec = item as Record<string, unknown>
+      const path = typeof rec.path === 'string' ? rec.path.trim() : ''
+      if (!path) continue
+      const name =
+        typeof rec.name === 'string' && rec.name.trim()
+          ? rec.name.trim()
+          : path.split(/[/\\]/).filter(Boolean).pop() || path
+      const source = typeof rec.source === 'string' && rec.source.trim() ? rec.source.trim() : 'device'
+      const gitRemote =
+        typeof rec.gitRemote === 'string' && rec.gitRemote.trim() ? rec.gitRemote.trim() : null
+      candidates.push({ path, name, source, gitRemote })
+    }
+    if (candidates.length === 0) {
+      throw new Error(
+        detectRoots.length
+          ? 'Device returned no workdirs under detectRoots / sessions — check paths on the device'
+          : 'Device returned no workdirs — open a coding session, or set detectRoots (Setup) to parent folders on the device',
+      )
+    }
+    return { candidates, detectRoots }
+  }
+
+  /**
+   * GitHub repos (metadata) + device detect match.
+   * on_device ≠ executor-ready clone by GitHub alone — requires a local path match.
+   */
+  async listGithubReposWithDeviceMatch(ownerId: string): Promise<{
+    detectRoots: string[]
+    device: DeviceWorkdirCandidate[]
+    github: GithubRepoMatch[]
+  }> {
+    const token = this.getUser(ownerId)?.githubAccessToken
+    if (!token?.trim()) {
+      throw new Error('GitHub login required to list repos — sign in with GitHub (or PAT)')
+    }
+    const { candidates, detectRoots } = await this.detectWorkdirCandidates(ownerId)
+    const repos = await fetchGithubReposForImport(token, { visibility: 'all' })
+    return {
+      detectRoots,
+      device: candidates,
+      github: matchGithubReposToDevice(repos, candidates),
     }
   }
 
@@ -2538,17 +2486,6 @@ export class Kernel {
       {
         type: 'function',
         function: {
-          name: 'analyze_project',
-          description: 'Refresh project analyzer facts',
-          parameters: {
-            type: 'object',
-            properties: { projectId: { type: 'string' } },
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
           name: 'create_assignment',
           description: 'Create assignment; fanOut required when projectId omitted',
           parameters: {
@@ -2577,8 +2514,9 @@ export class Kernel {
     const toolResults: unknown[] = []
     let finalReply = ''
 
+    const safeGw = this.assertSafeGatewayUrl(gatewayUrl)
     for (let round = 0; round < 6; round++) {
-      const res = await fetch(`${gatewayUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+      const res = await fetch(`${safeGw}/v1/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
