@@ -47,15 +47,19 @@ IDE transcript.
 | **Orchestrator** | “Pause all infinite runs”, “Global security cron” | assignments, runs, schedules |
 | **Deep link to DSH** | “Open / start Followup session” | API start policy → DSH start/attach (no coding inside kernel chat) |
 
-LLM for operator chat = **LocalAI-GateWay** (control-plane keys).  
-Coding tokens stay on the DSH → GateWay path.
+LLM for operator chat = **`operatorLlm`**: default **executor** (DSH preset
+`operator` + MCP tools) or explicit **gateway** (OpenAI-compat URL/key).  
+Coding tokens stay on the DSH ↔ model path for product agents.
 
 ### How the orchestrator is reached (no mystery bus)
 
 ```text
 You ──typed message──► agent-kernel chat API
                          │
-                         ├─ LLM (GateWay) chooses tool calls
+                         ├─ operatorLlm=executor → WSS operator_turn → DSH
+                         │     (MCP tools call kernel APIs)
+                         └─ operatorLlm=gateway → GateWay tool loop on kernel
+                               (same dispatchTool as UI buttons)
                          │
                          ├─ tools ──► Catalog / Profiles / Assignments
                          │         ──► Orchestration (nudge, pause, brief)

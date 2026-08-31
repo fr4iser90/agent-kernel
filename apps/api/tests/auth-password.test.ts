@@ -58,9 +58,7 @@ describe('password auth (secure only)', () => {
       method: 'PUT',
       headers: hdr,
       body: JSON.stringify({
-        dshInvokeMode: 'cli',
-        dshCliRoot: mkdtempSync(join(tmpdir(), 'cli-')),
-        dshHome: mkdtempSync(join(tmpdir(), 'home-')),
+        executorPaired: true,
       }),
     })
     // cli path missing bin → ping still errors, but gaps for endpoint fields clear

@@ -16,11 +16,13 @@
     "@hono/node-server": "^1.14.1",
     "better-sqlite3": "^11.9.1",
     "hono": "^4.7.5",
+    "ws": "^8.21.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.13.10",
+    "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "3.2.7",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",

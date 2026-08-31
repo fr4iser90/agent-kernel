@@ -70,22 +70,27 @@ export const api = {
     req('/api/me/executor', { method: 'PUT', body: JSON.stringify(body) }),
   connectGuide: () =>
     req<{
-      connectMode: string
-      modes: Array<{ id: string; title: string; summary: string }>
-      ssh: {
-        configured: boolean
-        sshTarget: string | null
-        remotePort: number
-        localPort: number
-        endpoint: string
-        trustedHost: string
-        command: string
-        notes: string[]
-      }
-      vpn: { endpointHint: string; trustedHostHint: string; notes: string[] }
-      publicUrl: { notes: string[] }
-      sameHost: { notes: string[] }
+      mode: 'outbound_wss'
+      paired: boolean
+      wssConnected: boolean
+      heartbeat: { lastSeenAt: string | null; deviceLabel: string | null }
+      notes: string[]
     }>('/api/me/executor/connect-guide'),
+  startPair: () =>
+    req<{
+      code: string
+      expiresAt: string
+      kernelUrl: string
+      pollIntervalMs: number
+    }>('/api/me/pair/start', { method: 'POST', body: '{}' }),
+  pairStatus: (code?: string) =>
+    req<{
+      status: 'pending' | 'claimed' | 'expired' | 'missing'
+      code: string | null
+      expiresAt: string | null
+      claimedAt: string | null
+      kernelUrl: string
+    }>(`/api/me/pair/status${code ? `?code=${encodeURIComponent(code)}` : ''}`),
   getSettings: () => req<Record<string, unknown>>('/api/settings'),
   putSettings: (body: Record<string, unknown>) =>
     req('/api/settings', { method: 'PUT', body: JSON.stringify(body) }),

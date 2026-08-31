@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { execSync } from 'node:child_process'
 import {
   existsSync,
@@ -14,8 +14,7 @@ import type { ProjectRepository } from '../domain/catalog/project-repository.js'
 import type { Project } from '../domain/catalog/project.js'
 import {
   DEFAULT_USER_EXECUTOR,
-  assignTunnelRemotePort,
-  type ExecutorConnectMode,
+  normalizeUserExecutorSettings,
   type User,
   type UserExecutorSettings,
 } from '../domain/identity/user.js'
@@ -26,10 +25,14 @@ import {
   userExecutorSetupGaps,
   type AgentKernelSettings,
 } from '../domain/settings/settings.js'
+import type {
+  ExecutorJobKind,
+  ExecutorJobRow,
+  ExecutorJobView,
+} from '../domain/executor/jobs.js'
 import { hashPassword, verifyPassword } from '../infrastructure/auth/password.js'
 import { cronMatches } from '../infrastructure/cron.js'
-import { DshHostClient } from '../infrastructure/dsh/dsh-host-client.js'
-import { createExecutor } from '../infrastructure/executor/create-executor.js'
+import { executorDeviceHub } from '../infrastructure/executor/device-hub.js'
 import { GitHubClient } from '../infrastructure/github/github-client.js'
 import {
   cloneGithubRepo,
@@ -39,7 +42,6 @@ import {
 } from '../infrastructure/catalog/local-and-github.js'
 import type { SqliteSettingsRepository } from '../infrastructure/sqlite/settings-repository.js'
 import type Database from 'better-sqlite3'
-import type { ExecutorPort } from '@agent-kernel/session-brief'
 import { authorizeSessionStart, assertPolicyAllowed } from './policy-authorize.js'
 
 export type FanOutSelector = {
@@ -225,6 +227,182 @@ export class Kernel {
         opts?.accessToken ?? null,
       )
     return token
+  }
+
+  /** Public site base URL for MCP/device pairing (WEB_ORIGIN, else https://WEB_HOST). */
+  publicKernelUrl(): string {
+    const origin = process.env.WEB_ORIGIN?.trim().replace(/\/$/, '')
+    if (origin) {
+      try {
+        // eslint-disable-next-line no-new
+        new URL(origin)
+      } catch {
+        throw new Error('WEB_ORIGIN must be an absolute http(s) URL')
+      }
+      return origin
+    }
+    const host = process.env.WEB_HOST?.trim()
+    if (!host) {
+      throw new Error('WEB_ORIGIN or WEB_HOST required for device pairing')
+    }
+    if (host.includes('://')) {
+      throw new Error('WEB_HOST must be a bare hostname, not a URL')
+    }
+    return `https://${host}`
+  }
+
+  /**
+   * Start a device-code pair for MCP / DSH Header (like `gh auth` / Tailscale).
+   * Code is single-use, 10 minutes TTL.
+   */
+  startDevicePair(ownerId: string): {
+    code: string
+    expiresAt: string
+    kernelUrl: string
+    pollIntervalMs: number
+  } {
+    if (!this.getUser(ownerId)) throw new Error('unauthorized')
+    const kernelUrl = this.publicKernelUrl()
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    const bytes = randomBytes(8)
+    let raw = ''
+    for (let i = 0; i < 8; i++) raw += alphabet[bytes[i]! % alphabet.length]
+    const code = `${raw.slice(0, 4)}-${raw.slice(4)}`
+    const createdAt = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
+    this.deps.db
+      .prepare(
+        `INSERT INTO device_pairs (code, owner_id, created_at, expires_at, claimed_at, session_token)
+         VALUES (?, ?, ?, ?, NULL, NULL)`,
+      )
+      .run(code, ownerId, createdAt, expiresAt)
+    return { code, expiresAt, kernelUrl, pollIntervalMs: 2000 }
+  }
+
+  devicePairStatus(
+    ownerId: string,
+    code?: string,
+  ): {
+    status: 'pending' | 'claimed' | 'expired' | 'missing'
+    code: string | null
+    expiresAt: string | null
+    claimedAt: string | null
+    kernelUrl: string
+  } {
+    if (!this.getUser(ownerId)) throw new Error('unauthorized')
+    const kernelUrl = this.publicKernelUrl()
+    const row = (
+      code
+        ? (this.deps.db
+            .prepare(
+              `SELECT code, owner_id, expires_at, claimed_at FROM device_pairs WHERE code = ? AND owner_id = ?`,
+            )
+            .get(code, ownerId) as
+            | { code: string; owner_id: string; expires_at: string; claimed_at: string | null }
+            | undefined)
+        : (this.deps.db
+            .prepare(
+              `SELECT code, owner_id, expires_at, claimed_at FROM device_pairs
+               WHERE owner_id = ? ORDER BY created_at DESC LIMIT 1`,
+            )
+            .get(ownerId) as
+            | { code: string; owner_id: string; expires_at: string; claimed_at: string | null }
+            | undefined)
+    )
+    if (!row) {
+      return { status: 'missing', code: null, expiresAt: null, claimedAt: null, kernelUrl }
+    }
+    if (row.claimed_at) {
+      return {
+        status: 'claimed',
+        code: row.code,
+        expiresAt: row.expires_at,
+        claimedAt: row.claimed_at,
+        kernelUrl,
+      }
+    }
+    if (Date.parse(row.expires_at) <= Date.now()) {
+      return {
+        status: 'expired',
+        code: row.code,
+        expiresAt: row.expires_at,
+        claimedAt: null,
+        kernelUrl,
+      }
+    }
+    return {
+      status: 'pending',
+      code: row.code,
+      expiresAt: row.expires_at,
+      claimedAt: null,
+      kernelUrl,
+    }
+  }
+
+  /**
+   * DSH/MCP claims a pairing code (no session cookie). Returns kernel URL + fresh session token.
+   */
+  claimDevicePair(codeRaw: string): { url: string; token: string; expiresAt: string } {
+    const code = codeRaw.trim().toUpperCase().replace(/\s+/g, '')
+    if (!/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(code)) {
+      throw new Error('invalid pairing code')
+    }
+    const row = this.deps.db
+      .prepare(
+        `SELECT code, owner_id, expires_at, claimed_at FROM device_pairs WHERE code = ?`,
+      )
+      .get(code) as
+      | { code: string; owner_id: string; expires_at: string; claimed_at: string | null }
+      | undefined
+    if (!row) throw new Error('pairing code unknown')
+    if (row.claimed_at) throw new Error('pairing code already used')
+    if (Date.parse(row.expires_at) <= Date.now()) throw new Error('pairing code expired')
+    if (!this.getUser(row.owner_id)) throw new Error('pairing code unknown')
+    const token = this.createSession(row.owner_id, { provider: 'device_pair' })
+    const claimedAt = new Date().toISOString()
+    const updated = this.deps.db
+      .prepare(
+        `UPDATE device_pairs SET claimed_at = ?, session_token = ?
+         WHERE code = ? AND claimed_at IS NULL`,
+      )
+      .run(claimedAt, token, code)
+    if (updated.changes !== 1) throw new Error('pairing code already used')
+    this.markExecutorPaired(row.owner_id)
+    this.touchExecutorHeartbeat(row.owner_id, 'device_pair')
+    return { url: this.publicKernelUrl(), token, expiresAt: row.expires_at }
+  }
+
+  /** Mark BYO executor as paired (setup gap closes). Default operator chat → executor. */
+  markExecutorPaired(ownerId: string): void {
+    const cur = this.getUserExecutorSettings(ownerId)
+    if (cur.executorPaired) return
+    this.putUserExecutorSettings(ownerId, {
+      executorPaired: true,
+      operatorLlm: cur.operatorLlm,
+    })
+  }
+
+  touchExecutorHeartbeat(ownerId: string, deviceLabel?: string): void {
+    if (!this.getUser(ownerId)) throw new Error('unauthorized')
+    const now = new Date().toISOString()
+    this.deps.db
+      .prepare(
+        `INSERT INTO executor_heartbeats (owner_id, last_seen_at, device_label) VALUES (?, ?, ?)
+         ON CONFLICT(owner_id) DO UPDATE SET
+           last_seen_at = excluded.last_seen_at,
+           device_label = COALESCE(excluded.device_label, executor_heartbeats.device_label)`,
+      )
+      .run(ownerId, now, deviceLabel ?? null)
+  }
+
+  executorHeartbeat(ownerId: string): { lastSeenAt: string | null; deviceLabel: string | null } {
+    const row = this.deps.db
+      .prepare(`SELECT last_seen_at, device_label FROM executor_heartbeats WHERE owner_id = ?`)
+      .get(ownerId) as { last_seen_at: string; device_label: string | null } | undefined
+    return {
+      lastSeenAt: row?.last_seen_at ?? null,
+      deviceLabel: row?.device_label ?? null,
+    }
   }
 
   ownerFromToken(token: string | undefined | null): string | null {
@@ -471,8 +649,8 @@ export class Kernel {
     const row = this.deps.db
       .prepare(`SELECT doc_json FROM user_settings WHERE user_id = ?`)
       .get(userId) as { doc_json: string }
-    const parsed = JSON.parse(row.doc_json) as Partial<UserExecutorSettings>
-    return { ...DEFAULT_USER_EXECUTOR, ...parsed }
+    const parsed = JSON.parse(row.doc_json) as Partial<UserExecutorSettings> & Record<string, unknown>
+    return normalizeUserExecutorSettings(parsed)
   }
 
   putUserExecutorSettings(
@@ -480,31 +658,15 @@ export class Kernel {
     patch: Partial<UserExecutorSettings>,
   ): UserExecutorSettings {
     const cur = this.getUserExecutorSettings(userId)
-    const next: UserExecutorSettings = { ...cur, ...patch }
-    const localPort = next.dshLocalPort ?? 13080
-    next.dshLocalPort = localPort
-
-    if (next.connectMode === 'ssh_reverse' && next.dshInvokeMode === 'host_http') {
-      const base = Number(process.env.EXECUTOR_SSH_TUNNEL_PORT_BASE ?? 13100)
-      if (!next.tunnelRemotePort) next.tunnelRemotePort = assignTunnelRemotePort(userId, base)
-      const reachHost =
-        process.env.EXECUTOR_SSH_TUNNEL_ENDPOINT_HOST?.trim() || 'host.docker.internal'
-      if (!next.dshEndpoint) {
-        next.dshEndpoint = `http://${reachHost}:${next.tunnelRemotePort}`
+    const next = normalizeUserExecutorSettings({ ...cur, ...patch })
+    if (next.operatorLlm === 'gateway') {
+      if (!next.gatewayUrl?.trim()) {
+        throw new Error('operatorLlm=gateway requires gatewayUrl')
       }
-      // Host header must match DSH TRUSTED_HOST on the user's machine (usually localhost:13080).
-      if (!next.dshTrustedHost) next.dshTrustedHost = `localhost:${localPort}`
-    } else if (next.connectMode === 'same_host' && next.dshInvokeMode === 'host_http') {
-      if (!next.dshEndpoint) next.dshEndpoint = `http://127.0.0.1:${localPort}`
-      if (!next.dshTrustedHost) next.dshTrustedHost = `localhost:${localPort}`
-    } else if (next.dshEndpoint && !next.dshTrustedHost) {
-      try {
-        next.dshTrustedHost = new URL(next.dshEndpoint).host
-      } catch {
-        /* keep null */
+      if (!next.gatewayApiKey?.trim()) {
+        throw new Error('operatorLlm=gateway requires gatewayApiKey')
       }
     }
-
     this.deps.db
       .prepare(
         `INSERT INTO user_settings (user_id, doc_json, updated_at) VALUES (?, ?, ?)
@@ -514,104 +676,26 @@ export class Kernel {
     return next
   }
 
-  /** Setup hints for public URL / SSH reverse / VPN — kernel never builds the tunnel itself. */
+  /** Setup status for BYO outbound DSH (pair + live WSS). */
   executorConnectGuide(userId: string): {
-    connectMode: ExecutorConnectMode
-    modes: Array<{
-      id: ExecutorConnectMode
-      title: string
-      summary: string
-    }>
-    ssh: {
-      configured: boolean
-      sshTarget: string | null
-      remotePort: number
-      localPort: number
-      endpoint: string
-      trustedHost: string
-      command: string
-      notes: string[]
-    }
-    vpn: {
-      endpointHint: string
-      trustedHostHint: string
-      notes: string[]
-    }
-    publicUrl: { notes: string[] }
-    sameHost: { notes: string[] }
+    mode: 'outbound_wss'
+    paired: boolean
+    wssConnected: boolean
+    heartbeat: { lastSeenAt: string | null; deviceLabel: string | null }
+    notes: string[]
   } {
     const s = this.getUserExecutorSettings(userId)
-    const base = Number(process.env.EXECUTOR_SSH_TUNNEL_PORT_BASE ?? 13100)
-    const remotePort = s.tunnelRemotePort ?? assignTunnelRemotePort(userId, base)
-    const localPort = s.dshLocalPort ?? 13080
-    // Prefer per-user Setup field; optional deploy default only as fallback hint.
-    const sshTarget =
-      s.sshTunnelTarget?.trim() ||
-      process.env.EXECUTOR_SSH_TUNNEL_TARGET?.trim() ||
-      null
-    const reachHost =
-      process.env.EXECUTOR_SSH_TUNNEL_ENDPOINT_HOST?.trim() || 'host.docker.internal'
-    const target = sshTarget ?? 'user@your-kernel-server'
-    const command = `ssh -N -R ${remotePort}:127.0.0.1:${localPort} ${target}`
     return {
-      connectMode: s.connectMode,
-      modes: [
-        {
-          id: 'public_url',
-          title: 'Public / Traefik URL',
-          summary: 'DSH already has a reachable HTTPS URL (Basic Auth optional).',
-        },
-        {
-          id: 'ssh_reverse',
-          title: 'SSH reverse tunnel',
-          summary: 'DSH only on localhost — you open a reverse tunnel from your PC.',
-        },
-        {
-          id: 'vpn',
-          title: 'VPN (e.g. Tailscale)',
-          summary: 'PC + server share a private IP — put that IP:port as endpoint.',
-        },
-        {
-          id: 'same_host',
-          title: 'Same machine',
-          summary: 'Kernel and DSH on one host — localhost is fine.',
-        },
+      mode: 'outbound_wss',
+      paired: s.executorPaired,
+      wssConnected: executorDeviceHub.hasLive(userId),
+      heartbeat: this.executorHeartbeat(userId),
+      notes: [
+        'Install agent-kernel-mcp on your DSH (Windows / macOS / Linux).',
+        'Pair with a one-time code in the DSH Session Header → Agent Kernel.',
+        'DSH opens outbound WSS to this kernel (/api/executor/ws). No VPN, no open ports on your PC.',
+        'MCP tools stay separate (stdio → HTTPS). Control plane is WSS only.',
       ],
-      ssh: {
-        configured: Boolean(sshTarget),
-        sshTarget,
-        remotePort,
-        localPort,
-        endpoint: `http://${reachHost}:${remotePort}`,
-        trustedHost: `localhost:${localPort}`,
-        command,
-        notes: [
-          'You set the SSH target yourself in Setup (e.g. deploy@your-server) — the kernel only stores it to show the command.',
-          'Start DSH locally first, then keep this SSH command running (or use scripts/dsh-reverse-tunnel.sh / autossh).',
-          'sshd on the kernel host needs GatewayPorts clientspecified (or yes) so Docker can reach the forwarded port.',
-          'dshTrustedHost must match DSH TRUSTED_HOST (usually localhost:13080); endpoint is only how the kernel reaches the tunnel.',
-        ],
-      },
-      vpn: {
-        endpointHint: `http://100.x.y.z:${localPort}`,
-        trustedHostHint: `localhost:${localPort}`,
-        notes: [
-          'Install Tailscale (or WireGuard) on your PC and the kernel host.',
-          'Use your PC’s VPN IP as dshEndpoint; keep dshTrustedHost = DSH TRUSTED_HOST (often localhost:PORT).',
-        ],
-      },
-      publicUrl: {
-        notes: [
-          'Paste the full DSH base URL. If behind Traefik Basic Auth, fill user/password.',
-          'When endpoint host equals what DSH trusts, set dshTrustedHost to that same host:port.',
-        ],
-      },
-      sameHost: {
-        notes: [
-          'Only when the API process can dial 127.0.0.1 on this machine (L-native or API not in a remote container).',
-          'Server kernel + DSH on your PC → use ssh_reverse or vpn. Do not invent host-gateway / port publishes.',
-        ],
-      },
     }
   }
 
@@ -1403,53 +1487,208 @@ export class Kernel {
     }
   }
 
-  /** BYO only — never falls back to global Settings DSH. */
-  private resolveExecutorConfig(ownerId: string): {
-    executorId: string
-    dshInvokeMode: 'cli' | 'host_http'
-    dshEndpoint: string | null
-    dshTrustedHost: string | null
-    dshBasicAuthUser: string | null
-    dshBasicAuthPassword: string | null
-    dshCliRoot: string | null
-    dshHome: string | null
-  } {
-    if (!ownerId || !this.getUser(ownerId)) {
-      throw new Error('executor requires authenticated kernel user')
-    }
-    const ue = this.getUserExecutorSettings(ownerId)
-    const gaps = userExecutorSetupGaps(ue)
-    if (gaps.length) {
-      throw new Error(
-        `My Executor incomplete: ${gaps.join(', ')}. Set your DSH/PIDEA endpoint under My Executor — no shared global executor.`,
-      )
-    }
-    return ue
-  }
-
-  private executor(ownerId: string): ExecutorPort {
-    return createExecutor(this.resolveExecutorConfig(ownerId))
-  }
-
-  async pingDsh(ownerId: string): Promise<void> {
-    const s = this.resolveExecutorConfig(ownerId)
+  /** Health for paired outbound executor — requires live WSS. */
+  async pingDsh(ownerId: string): Promise<{
+    paired: boolean
+    lastSeenAt: string | null
+    wssConnected: boolean
+  }> {
+    const s = this.getUserExecutorSettings(ownerId)
     if (s.executorId !== 'dsh') {
       throw new Error(`test-dsh only applies to executorId=dsh (got ${s.executorId})`)
     }
-    if (s.dshInvokeMode === 'cli') {
-      const has =
-        existsSync(join(s.dshCliRoot!, 'apps/cli/src/bin.ts')) ||
-        existsSync(join(s.dshCliRoot!, 'apps/cli/lib/bin.js'))
-      if (!has) throw new Error(`DSH CLI missing under ${s.dshCliRoot}`)
-      return
+    if (!s.executorPaired) {
+      throw new Error('DSH not paired — generate a code and claim it from your DSH Header')
     }
-    const client = new DshHostClient({
-      endpoint: s.dshEndpoint!,
-      trustedHost: s.dshTrustedHost!,
-      basicAuthUser: s.dshBasicAuthUser,
-      basicAuthPassword: s.dshBasicAuthPassword,
+    const live = executorDeviceHub.hasLive(ownerId)
+    const hb = this.executorHeartbeat(ownerId)
+    if (!live) {
+      throw new Error(
+        'No live WSS from DSH — start DeepSeek Harness with agent-kernel-mcp (outbound /api/executor/ws)',
+      )
+    }
+    return { paired: true, lastSeenAt: hb.lastSeenAt, wssConnected: true }
+  }
+
+  private enqueueExecutorJob(
+    ownerId: string,
+    runId: string,
+    kind: ExecutorJobKind,
+    payload: Record<string, unknown>,
+  ): ExecutorJobView {
+    if (!executorDeviceHub.hasLive(ownerId)) {
+      throw new Error(
+        'No paired DSH connected over WSS — open DSH with agent-kernel-mcp so it can receive jobs',
+      )
+    }
+    const id = randomUUID()
+    const createdAt = new Date().toISOString()
+    this.deps.db
+      .prepare(
+        `INSERT INTO executor_jobs
+         (id, owner_id, run_id, kind, status, payload_json, result_json, error_text, created_at, claimed_at, completed_at)
+         VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL, ?, NULL, NULL)`,
+      )
+      .run(id, ownerId, runId, kind, JSON.stringify(payload), createdAt)
+    const view: ExecutorJobView = { id, runId, kind, payload, createdAt }
+    const n = executorDeviceHub.push(ownerId, {
+      type: 'job.created',
+      jobId: id,
+      runId,
+      kind,
+      payload,
+      createdAt,
     })
-    await client.ping()
+    if (n < 1) {
+      this.deps.db
+        .prepare(
+          `UPDATE executor_jobs SET status = 'failed', error_text = ?, completed_at = ? WHERE id = ?`,
+        )
+        .run('WSS push failed — no live device', new Date().toISOString(), id)
+      throw new Error('WSS push failed — no live DSH socket')
+    }
+    return view
+  }
+
+  /** On WSS reconnect: re-push pending jobs (at-least-once). */
+  pushPendingJobsToDevice(ownerId: string): number {
+    if (!this.getUser(ownerId)) throw new Error('unauthorized')
+    if (!executorDeviceHub.hasLive(ownerId)) return 0
+    const rows = this.deps.db
+      .prepare(
+        `SELECT * FROM executor_jobs
+         WHERE owner_id = ? AND status = 'pending'
+         ORDER BY created_at ASC`,
+      )
+      .all(ownerId) as ExecutorJobRow[]
+    let n = 0
+    for (const row of rows) {
+      n += executorDeviceHub.push(ownerId, {
+        type: 'job.created',
+        jobId: row.id,
+        runId: row.run_id,
+        kind: row.kind,
+        payload: JSON.parse(row.payload_json) as Record<string, unknown>,
+        createdAt: row.created_at,
+      })
+    }
+    return n
+  }
+
+  markExecutorJobClaimed(ownerId: string, jobId: string): void {
+    if (!this.getUser(ownerId)) throw new Error('unauthorized')
+    const updated = this.deps.db
+      .prepare(
+        `UPDATE executor_jobs SET status = 'claimed', claimed_at = ?
+         WHERE id = ? AND owner_id = ? AND status = 'pending'`,
+      )
+      .run(new Date().toISOString(), jobId, ownerId)
+    if (updated.changes !== 1) {
+      // already claimed/completed is ok (at-least-once delivery)
+      const row = this.deps.db
+        .prepare(`SELECT status FROM executor_jobs WHERE id = ? AND owner_id = ?`)
+        .get(jobId, ownerId) as { status: string } | undefined
+      if (!row) throw new Error('executor job not found')
+    }
+    this.touchExecutorHeartbeat(ownerId)
+  }
+
+  completeExecutorJob(
+    ownerId: string,
+    jobId: string,
+    body: {
+      ok: boolean
+      result?: Record<string, unknown>
+      error?: string
+    },
+  ): { runId: string; status: string } {
+    if (!this.getUser(ownerId)) throw new Error('unauthorized')
+    this.touchExecutorHeartbeat(ownerId)
+
+    const row = this.deps.db
+      .prepare(`SELECT * FROM executor_jobs WHERE id = ? AND owner_id = ?`)
+      .get(jobId, ownerId) as ExecutorJobRow | undefined
+    if (!row) throw new Error('executor job not found')
+    if (row.status === 'completed' || row.status === 'failed') {
+      throw new Error(`executor job already ${row.status}`)
+    }
+    if (row.status !== 'claimed' && row.status !== 'pending') {
+      throw new Error(`executor job status=${row.status}`)
+    }
+    if (row.status === 'pending') {
+      this.deps.db
+        .prepare(
+          `UPDATE executor_jobs SET status = 'claimed', claimed_at = ? WHERE id = ? AND status = 'pending'`,
+        )
+        .run(new Date().toISOString(), jobId)
+    }
+
+    const completedAt = new Date().toISOString()
+    if (!body.ok) {
+      const err = body.error?.trim() || 'executor job failed'
+      this.deps.db
+        .prepare(
+          `UPDATE executor_jobs SET status = 'failed', error_text = ?, completed_at = ?, result_json = ?
+           WHERE id = ?`,
+        )
+        .run(err, completedAt, body.result ? JSON.stringify(body.result) : null, jobId)
+      if (!row.run_id.startsWith('operator:')) {
+        this.deps.db
+          .prepare(
+            `UPDATE runs SET outcome = 'failed', ended_at = ?, deny_reason = ? WHERE id = ? AND outcome IN ('queued', 'waiting_executor', 'running')`,
+          )
+          .run(completedAt, err.slice(0, 500), row.run_id)
+      }
+      return { runId: row.run_id, status: 'failed' }
+    }
+
+    const result = body.result ?? {}
+    this.deps.db
+      .prepare(
+        `UPDATE executor_jobs SET status = 'completed', completed_at = ?, result_json = ?, error_text = NULL
+         WHERE id = ?`,
+      )
+      .run(completedAt, JSON.stringify(result), jobId)
+
+    if (row.kind === 'start') {
+      const sessionId = String(result.executorSessionId ?? '').trim()
+      if (!sessionId) throw new Error('start job result requires executorSessionId')
+      this.deps.db
+        .prepare(
+          `UPDATE runs SET executor_session_id = ?, outcome = 'running', ended_at = NULL, deny_reason = NULL
+           WHERE id = ?`,
+        )
+        .run(sessionId, row.run_id)
+    } else if (row.kind === 'nudge') {
+      /* keep running */
+    } else if (row.kind === 'fetch_transcript') {
+      if (result.transcript === undefined) {
+        throw new Error('fetch_transcript result requires transcript')
+      }
+      this.deps.db
+        .prepare(`UPDATE runs SET transcript_json = ? WHERE id = ?`)
+        .run(JSON.stringify(result.transcript), row.run_id)
+      const running = Boolean(
+        (result.transcript as { session?: { running?: boolean } })?.session?.running,
+      )
+      if (running) {
+        this.deps.db
+          .prepare(`UPDATE runs SET outcome = 'running', ended_at = NULL WHERE id = ?`)
+          .run(row.run_id)
+      } else {
+        this.deps.db
+          .prepare(
+            `UPDATE runs SET outcome = 'completed', ended_at = COALESCE(ended_at, ?) WHERE id = ?`,
+          )
+          .run(completedAt, row.run_id)
+      }
+    } else if (row.kind === 'operator_turn') {
+      if (typeof result.reply !== 'string' || !result.reply.trim()) {
+        throw new Error('operator_turn result requires non-empty reply string')
+      }
+    }
+
+    return { runId: row.run_id, status: 'completed' }
   }
 
   materializeInject(brief: SessionBrief): void {
@@ -1590,72 +1829,78 @@ export class Kernel {
     promptText?: string | null,
     existingRunId?: string,
   ): Promise<unknown> {
-    this.materializeInject(brief)
-    const ex = this.executor(ownerId)
-    const s = this.resolveExecutorConfig(ownerId)
-
-    let executorSessionId: string
-    const last = this.deps.db
-      .prepare(
-        `SELECT executor_session_id FROM runs
-         WHERE assignment_id = ? AND project_id = ? AND outcome = 'running'
-         ORDER BY started_at DESC LIMIT 1`,
+    const ue = this.getUserExecutorSettings(ownerId)
+    const gaps = userExecutorSetupGaps(ue)
+    if (gaps.length) {
+      throw new Error(
+        `My Executor incomplete: ${gaps.join(', ')}. Pair your DSH before starting runs.`,
       )
-      .get(brief.assignmentId, brief.projectId) as { executor_session_id: string } | undefined
-
-    if (s.dshInvokeMode === 'host_http' && last?.executor_session_id && promptText?.trim()) {
-      await ex.nudge(brief, last.executor_session_id, promptText)
-      executorSessionId = last.executor_session_id
-    } else {
-      const started = await ex.start(brief)
-      executorSessionId = started.executorSessionId
-      if (promptText?.trim() && s.dshInvokeMode === 'host_http') {
-        await ex.nudge(brief, executorSessionId, promptText)
-      }
     }
 
     const briefJson = JSON.stringify(brief)
     const hash = createHash('sha256').update(briefJson).digest('hex').slice(0, 16)
-    const outcome = s.dshInvokeMode === 'cli' ? 'completed' : 'running'
     const now = new Date().toISOString()
 
-    if (existingRunId) {
+    const last = this.deps.db
+      .prepare(
+        `SELECT id, executor_session_id FROM runs
+         WHERE assignment_id = ? AND project_id = ? AND outcome IN ('running', 'queued', 'waiting_executor')
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(brief.assignmentId, brief.projectId) as
+      | { id: string; executor_session_id: string | null }
+      | undefined
+
+    let runId = existingRunId
+    if (!runId) {
+      runId = randomUUID()
       this.deps.db
         .prepare(
-          `UPDATE runs SET executor_session_id = ?, outcome = ?, ended_at = ?, brief_json = ?, brief_hash = ?, deny_reason = NULL
-           WHERE id = ?`,
+          `INSERT INTO runs
+           (id, assignment_id, project_id, executor_id, executor_session_id, started_at, ended_at, outcome, brief_json, brief_hash, deny_reason)
+           VALUES (?, ?, ?, ?, NULL, ?, NULL, 'queued', ?, ?, NULL)`,
         )
         .run(
-          executorSessionId,
-          outcome,
-          outcome === 'completed' ? now : null,
+          runId,
+          brief.assignmentId,
+          brief.projectId,
+          brief.executorId,
+          now,
           briefJson,
           hash,
-          existingRunId,
         )
-      return this.deps.db.prepare(`SELECT * FROM runs WHERE id = ?`).get(existingRunId)
+    } else {
+      this.deps.db
+        .prepare(
+          `UPDATE runs SET outcome = 'queued', ended_at = NULL, brief_json = ?, brief_hash = ?, deny_reason = NULL
+           WHERE id = ?`,
+        )
+        .run(briefJson, hash, runId)
     }
 
-    const id = randomUUID()
-    this.deps.db
-      .prepare(
-        `INSERT INTO runs
-         (id, assignment_id, project_id, executor_id, executor_session_id, started_at, ended_at, outcome, brief_json, brief_hash, deny_reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      )
-      .run(
-        id,
-        brief.assignmentId,
-        brief.projectId,
-        brief.executorId,
-        executorSessionId,
-        now,
-        outcome === 'completed' ? now : null,
-        outcome,
-        briefJson,
-        hash,
-      )
-    return this.deps.db.prepare(`SELECT * FROM runs WHERE id = ?`).get(id)
+    const existingSession = last?.executor_session_id?.trim()
+    if (existingSession && promptText?.trim()) {
+      this.enqueueExecutorJob(ownerId, runId, 'nudge', {
+        brief,
+        executorSessionId: existingSession,
+        prompt: promptText.trim(),
+      })
+      this.deps.db
+        .prepare(
+          `UPDATE runs SET executor_session_id = ?, outcome = 'waiting_executor' WHERE id = ?`,
+        )
+        .run(existingSession, runId)
+    } else {
+      this.enqueueExecutorJob(ownerId, runId, 'start', {
+        brief,
+        prompt: promptText?.trim() || null,
+      })
+      this.deps.db
+        .prepare(`UPDATE runs SET outcome = 'waiting_executor' WHERE id = ?`)
+        .run(runId)
+    }
+
+    return this.deps.db.prepare(`SELECT * FROM runs WHERE id = ?`).get(runId)
   }
 
   /** Approve an llm_propose run — only then ExecutorPort.start. */
@@ -1884,8 +2129,8 @@ export class Kernel {
   }
 
   /**
-   * Live executor transcript for a run via ExecutorPort.getTranscript.
-   * Fails loudly if session id or executor cannot serve history.
+   * Transcript via outbound fetch_transcript job + cache on runs.transcript_json.
+   * Kernel never dials DSH.
    */
   async getRunTranscript(ownerId: string, runId: string) {
     const run = this.getRun(runId) as
@@ -1897,37 +2142,81 @@ export class Kernel {
           outcome: string | null
           started_at: string
           ended_at: string | null
+          transcript_json: string | null
         }
       | undefined
     if (!run) throw new Error(`run not found: ${runId}`)
     const sessionId = run.executor_session_id?.trim()
     if (!sessionId) {
-      throw new Error(`run ${runId} has no executor_session_id — cannot load transcript`)
+      throw new Error(
+        `run ${runId} has no executor_session_id yet (outcome=${run.outcome}) — waiting for paired DSH over WSS to complete the start job`,
+      )
     }
 
-    const ex = this.executor(ownerId)
-    const transcript = await ex.getTranscript(sessionId)
-
-    if (transcript.session.running && run.outcome !== 'running') {
-      this.deps.db
-        .prepare(`UPDATE runs SET outcome = 'running', ended_at = NULL WHERE id = ?`)
-        .run(runId)
-    } else if (!transcript.session.running && run.outcome === 'running') {
-      this.deps.db
-        .prepare(`UPDATE runs SET outcome = 'completed', ended_at = ? WHERE id = ?`)
-        .run(new Date().toISOString(), runId)
+    const gaps = userExecutorSetupGaps(this.getUserExecutorSettings(ownerId))
+    if (gaps.length) {
+      throw new Error(`My Executor incomplete: ${gaps.join(', ')}`)
     }
 
-    return {
-      run: this.getRun(runId),
-      session: transcript.session,
-      historyPages: transcript.meta.historyPages,
-      eventCount: transcript.meta.eventCount,
-      messages: transcript.messages,
-      fileOps: transcript.fileOps,
-      rawEvents: transcript.rawEvents,
-      executorId: ex.id,
+    const pending = this.deps.db
+      .prepare(
+        `SELECT id FROM executor_jobs
+         WHERE run_id = ? AND kind = 'fetch_transcript' AND status IN ('pending', 'claimed')
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(runId) as { id: string } | undefined
+
+    if (!pending) {
+      this.enqueueExecutorJob(ownerId, runId, 'fetch_transcript', {
+        executorSessionId: sessionId,
+      })
     }
+
+    const deadline = Date.now() + 20_000
+    while (Date.now() < deadline) {
+      const fresh = this.getRun(runId) as { transcript_json: string | null } | undefined
+      if (fresh?.transcript_json) {
+        const transcript = JSON.parse(fresh.transcript_json) as {
+          session: {
+            sessionId: string
+            running: boolean
+            blank: boolean
+            cwd: string | null
+            title: string | null
+            updatedAt: number
+            agentPreset?: string | null
+          }
+          messages: unknown[]
+          fileOps: unknown[]
+          rawEvents: unknown[]
+          meta: { historyPages: number; eventCount: number }
+        }
+        return {
+          run: this.getRun(runId),
+          session: transcript.session,
+          historyPages: transcript.meta.historyPages,
+          eventCount: transcript.meta.eventCount,
+          messages: transcript.messages,
+          fileOps: transcript.fileOps,
+          rawEvents: transcript.rawEvents,
+          executorId: 'dsh',
+        }
+      }
+      const failed = this.deps.db
+        .prepare(
+          `SELECT error_text FROM executor_jobs
+           WHERE run_id = ? AND kind = 'fetch_transcript' AND status = 'failed'
+           ORDER BY completed_at DESC LIMIT 1`,
+        )
+        .get(runId) as { error_text: string | null } | undefined
+      if (failed?.error_text) {
+        throw new Error(`transcript job failed: ${failed.error_text}`)
+      }
+      await new Promise((r) => setTimeout(r, 400))
+    }
+    throw new Error(
+      'transcript not available — paired DSH did not complete fetch_transcript within 20s (is DSH running?)',
+    )
   }
 
   /** Cross-repo agent board: assignments + latest run + project/profile labels. */
@@ -2113,32 +2402,68 @@ export class Kernel {
     }
   }
 
-  async operatorChat(
+  private async waitExecutorJobResult(
+    ownerId: string,
+    jobId: string,
+    timeoutMs: number,
+  ): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const row = this.deps.db
+        .prepare(`SELECT * FROM executor_jobs WHERE id = ? AND owner_id = ?`)
+        .get(jobId, ownerId) as ExecutorJobRow | undefined
+      if (!row) throw new Error(`executor job missing: ${jobId}`)
+      if (row.status === 'completed') {
+        if (!row.result_json) throw new Error(`executor job ${jobId} completed without result_json`)
+        return JSON.parse(row.result_json) as Record<string, unknown>
+      }
+      if (row.status === 'failed') {
+        throw new Error(row.error_text?.trim() || `executor job ${jobId} failed`)
+      }
+      await new Promise((r) => setTimeout(r, 400))
+    }
+    throw new Error(`executor job ${jobId} timed out after ${timeoutMs}ms`)
+  }
+
+  private async operatorChatViaExecutor(
     message: string,
     scope: { projectId?: string; ownerId: string },
-  ): Promise<{
-    reply: string
-    toolResults: unknown[]
-  }> {
-    const gaps = this.setupGapsForUser(scope.ownerId)
-    if (gaps.length) {
-      throw new Error(`Setup incomplete: ${gaps.join(', ')}. Configure My Executor first.`)
+  ): Promise<{ reply: string; toolResults: unknown[] }> {
+    const runId = `operator:${randomUUID()}`
+    const job = this.enqueueExecutorJob(scope.ownerId, runId, 'operator_turn', {
+      message,
+      projectId: scope.projectId ?? null,
+      agentPreset: 'operator',
+      systemPrompt: [
+        'You are the agent-kernel operator (control plane only).',
+        `Scope projectId=${scope.projectId ?? 'overview'}.`,
+        'Use only agent-kernel MCP / kernel tools for control-plane actions.',
+        'Do not edit product code, run shells, or invent fake run results.',
+        'If a tool is unavailable, say so — do not improvise.',
+      ].join(' '),
+    })
+    const result = await this.waitExecutorJobResult(scope.ownerId, job.id, 180_000)
+    const reply = typeof result.reply === 'string' ? result.reply.trim() : ''
+    if (!reply) throw new Error('operator_turn returned empty reply')
+    return {
+      reply,
+      toolResults: Array.isArray(result.toolResults) ? result.toolResults : [],
     }
-    const ue = this.getUserExecutorSettings(scope.ownerId)
-    const gatewayUrl = ue.gatewayUrl?.trim() || this.settings().gatewayUrl?.trim()
-    const gatewayKey =
-      ue.gatewayApiKey?.trim() ||
-      this.settings().gatewayApiKey?.trim() ||
-      (this.settings().gatewayApiKeyRef
-        ? process.env[this.settings().gatewayApiKeyRef!]
-        : undefined)
+  }
+
+  private async operatorChatViaGateway(
+    message: string,
+    scope: { projectId?: string; ownerId: string },
+    ue: UserExecutorSettings,
+  ): Promise<{ reply: string; toolResults: unknown[] }> {
+    const gatewayUrl = ue.gatewayUrl?.trim()
+    const key = ue.gatewayApiKey?.trim()
     if (!gatewayUrl) {
-      throw new Error('gatewayUrl required on My Executor (or global Settings) — no fake LLM')
+      throw new Error('operatorLlm=gateway requires gatewayUrl on My Executor')
     }
-    if (!gatewayKey) {
-      throw new Error('gatewayApiKey required on My Executor (or global Settings)')
+    if (!key) {
+      throw new Error('operatorLlm=gateway requires gatewayApiKey on My Executor')
     }
-    const key = gatewayKey
 
     const tools = [
       {
@@ -2287,17 +2612,6 @@ export class Kernel {
       const calls = msg.tool_calls ?? []
       if (!calls.length) {
         finalReply = msg.content ?? ''
-        // legacy JSON-in-content fallback
-        const trimmed = (msg.content ?? '').trim()
-        if (trimmed.startsWith('{') && trimmed.includes('"tool"')) {
-          try {
-            const call = JSON.parse(trimmed) as Parameters<Kernel['dispatchTool']>[0]
-            toolResults.push(await this.dispatchTool(call, scope))
-            finalReply = JSON.stringify(toolResults[toolResults.length - 1], null, 2)
-          } catch (e) {
-            toolResults.push({ error: e instanceof Error ? e.message : String(e) })
-          }
-        }
         break
       }
       for (const tc of calls) {
@@ -2329,5 +2643,26 @@ export class Kernel {
       finalReply = `Executed ${toolResults.length} tool call(s).`
     }
     return { reply: finalReply, toolResults }
+  }
+
+  async operatorChat(
+    message: string,
+    scope: { projectId?: string; ownerId: string },
+  ): Promise<{
+    reply: string
+    toolResults: unknown[]
+  }> {
+    const gaps = this.setupGapsForUser(scope.ownerId)
+    if (gaps.length) {
+      throw new Error(`Setup incomplete: ${gaps.join(', ')}. Configure My Executor first.`)
+    }
+    const ue = this.getUserExecutorSettings(scope.ownerId)
+    if (ue.operatorLlm === 'executor') {
+      return this.operatorChatViaExecutor(message, scope)
+    }
+    if (ue.operatorLlm === 'gateway') {
+      return this.operatorChatViaGateway(message, scope, ue)
+    }
+    throw new Error(`operatorLlm must be executor|gateway (got ${String(ue.operatorLlm)})`)
   }
 }

@@ -18,13 +18,16 @@ docker compose -f deploy/compose.yml up --build
 
 # Remote (S) — Traefik attach (DNS A/AAAA for WEB_HOST + API_HOST must exist first)
 cp deploy/.env.server.example deploy/.env.server   # fill secrets
-mkdir -p "${WORKSPACE_ROOT:-/home/docker/docker/agent-kernel/workspaces}"
+mkdir -p "${WORKSPACE_ROOT:-/var/lib/agent-kernel/workspaces}"
 docker compose -f deploy/compose.yml -f deploy/compose.server.yml \
   --env-file deploy/.env --env-file deploy/.env.server up -d --build
 
-# Required DNS (same IP as fr4iser-deepseek.fr4iser.com / Traefik):
-#   agent-kernel.fr4iser.com
-#   api.agent-kernel.fr4iser.com
+# API runtime uses `node --import tsx` (no Corepack → no npm download at start).
+# After pulling Dockerfile.api changes, always `--build`.
+
+# Required DNS (A/AAAA for WEB_HOST + API_HOST → your Traefik):
+#   kernel.example.com
+#   api.kernel.example.com
 # GitHub OAuth App callback must match GITHUB_REDIRECT_URI.
 
 # Remote + Postgres (ADR-0005)

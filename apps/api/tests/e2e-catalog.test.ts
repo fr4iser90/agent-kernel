@@ -125,9 +125,7 @@ describe('e2e auth + catalog + analyze', () => {
       method: 'PUT',
       headers: { 'content-type': 'application/json', 'x-ak-session': token },
       body: JSON.stringify({
-        dshInvokeMode: 'cli',
-        dshCliRoot: mkdtempSync(join(tmpdir(), 'cli-')),
-        dshHome: mkdtempSync(join(tmpdir(), 'home-')),
+        executorPaired: true,
       }),
     })
     const hdr = { 'content-type': 'application/json', 'x-ak-session': token }
@@ -136,9 +134,7 @@ describe('e2e auth + catalog + analyze', () => {
       method: 'PUT',
       headers: hdr,
       body: JSON.stringify({
-        dshInvokeMode: 'cli',
-        dshCliRoot: join(process.cwd(), '..', '..'),
-        dshHome: mkdtempSync(join(tmpdir(), 'dshhome-')),
+        executorPaired: true,
         setupCompleted: true,
         githubCloneRoot: mkdtempSync(join(tmpdir(), 'ghclone-')),
         githubDefaultLogin: 'fr4iser90',
@@ -240,9 +236,7 @@ describe('e2e auth + catalog + analyze', () => {
     const kernel = testKernel()
     kernel.putSettings({
       setupCompleted: true,
-      dshInvokeMode: 'cli',
-      dshCliRoot: join(process.cwd(), '..', '..'),
-      dshHome: mkdtempSync(join(tmpdir(), 'dshhome-')),
+      executorPaired: true,
       githubCloneRoot: cloneRoot,
       githubDefaultLogin: 'fr4iser90',
       githubOAuthClientId: 'cid',
@@ -265,9 +259,7 @@ describe('e2e auth + catalog + analyze', () => {
       method: 'PUT',
       headers: hdr,
       body: JSON.stringify({
-        dshInvokeMode: 'cli',
-        dshCliRoot: mkdtempSync(join(tmpdir(), 'cli-')),
-        dshHome: mkdtempSync(join(tmpdir(), 'home-')),
+        executorPaired: true,
       }),
     })
 
@@ -307,9 +299,7 @@ describe('e2e auth + catalog + analyze', () => {
     const kernel = testKernel()
     kernel.putSettings({
       setupCompleted: true,
-      dshInvokeMode: 'cli',
-      dshCliRoot: join(process.cwd(), '..', '..'),
-      dshHome: mkdtempSync(join(tmpdir(), 'dshhome-')),
+      executorPaired: true,
     })
     const app = createApp(kernel)
     const reg = await app.request('/api/auth/register', {
@@ -322,9 +312,7 @@ describe('e2e auth + catalog + analyze', () => {
       method: 'PUT',
       headers: { 'content-type': 'application/json', 'x-ak-session': token },
       body: JSON.stringify({
-        dshInvokeMode: 'cli',
-        dshCliRoot: mkdtempSync(join(tmpdir(), 'cli-')),
-        dshHome: mkdtempSync(join(tmpdir(), 'home-')),
+        executorPaired: true,
       }),
     })
     const hdr = { 'content-type': 'application/json', 'x-ak-session': token }

@@ -12,58 +12,85 @@ export type User = {
   updatedAt: string
 }
 
-/** How the user's local DSH is reached from a remote kernel. */
-export type ExecutorConnectMode = 'public_url' | 'ssh_reverse' | 'vpn' | 'same_host'
+/** Where the in-app operator chat LLM runs (explicit — no silent fallback). */
+export type OperatorLlmMode = 'executor' | 'gateway'
 
-/** Per-user BYO executor + optional GateWay (not global settings). */
+/**
+ * Per-user BYO executor. Public product: DSH dials the kernel (pair + jobs).
+ * Kernel never dials the user's DSH.
+ */
 export type UserExecutorSettings = {
   executorId: string
-  dshInvokeMode: 'cli' | 'host_http'
-  /** Reachability path — orthogonal to auth; guides setup + auto-fill. */
-  connectMode: ExecutorConnectMode
-  dshEndpoint: string | null
-  dshTrustedHost: string | null
-  /** Remote listen port on kernel host for SSH -R (ssh_reverse). */
-  tunnelRemotePort: number | null
-  /** Local DSH listen port on the user's machine (default 13080). */
-  dshLocalPort: number | null
   /**
-   * User's SSH destination for reverse tunnel, e.g. deploy@kernel.example.
-   * Set by the user in Setup — not an operator-only env.
+   * True after at least one successful device pair claim.
+   * Cleared only if the user explicitly resets executor setup.
    */
-  sshTunnelTarget: string | null
-  dshBasicAuthUser: string | null
-  dshBasicAuthPassword: string | null
-  dshCliRoot: string | null
-  dshHome: string | null
-  dshWorkdirHostPrefix: string | null
-  dshWorkdirContainerPrefix: string | null
+  executorPaired: boolean
+  /**
+   * Operator-chat LLM backend.
+   * - executor — default after pair; DSH runs a restricted operator turn (MCP tools only)
+   * - gateway — OpenAI-compatible GateWay URL+key (chat without coding runtime)
+   */
+  operatorLlm: OperatorLlmMode
+  /** Required when operatorLlm=gateway (also optional for llm_propose reviews). */
   gatewayUrl: string | null
   gatewayApiKey: string | null
 }
 
 export const DEFAULT_USER_EXECUTOR: UserExecutorSettings = {
   executorId: 'dsh',
-  dshInvokeMode: 'host_http',
-  connectMode: 'public_url',
-  dshEndpoint: null,
-  dshTrustedHost: null,
-  tunnelRemotePort: null,
-  dshLocalPort: 13080,
-  sshTunnelTarget: null,
-  dshBasicAuthUser: null,
-  dshBasicAuthPassword: null,
-  dshCliRoot: null,
-  dshHome: null,
-  dshWorkdirHostPrefix: null,
-  dshWorkdirContainerPrefix: null,
+  executorPaired: false,
+  operatorLlm: 'executor',
   gatewayUrl: null,
   gatewayApiKey: null,
 }
 
-/** Stable per-user remote port for SSH reverse tunnels. */
-export function assignTunnelRemotePort(userId: string, base = 13100): number {
-  let h = 0
-  for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) >>> 0
-  return base + (h % 1000)
+/** Drop removed Host-HTTP / SSH / connectMode fields from stored JSON. */
+export function normalizeUserExecutorSettings(
+  raw: Partial<UserExecutorSettings> & Record<string, unknown>,
+): UserExecutorSettings {
+  const {
+    connectMode: _c,
+    dshEndpoint: _e,
+    dshTrustedHost: _th,
+    dshLocalPort: _lp,
+    dshBasicAuthUser: _bau,
+    dshBasicAuthPassword: _bap,
+    dshInvokeMode: _im,
+    dshCliRoot: _cli,
+    dshHome: _home,
+    dshWorkdirHostPrefix: _wh,
+    dshWorkdirContainerPrefix: _wc,
+    tunnelRemotePort: _t,
+    sshTunnelTarget: _s,
+    ...rest
+  } = raw as Partial<UserExecutorSettings> & Record<string, unknown>
+  void _c
+  void _e
+  void _th
+  void _lp
+  void _bau
+  void _bap
+  void _im
+  void _cli
+  void _home
+  void _wh
+  void _wc
+  void _t
+  void _s
+  const merged = { ...DEFAULT_USER_EXECUTOR, ...rest }
+  merged.executorPaired = Boolean(merged.executorPaired)
+  if (!merged.executorId) merged.executorId = 'dsh'
+  const mode = String(merged.operatorLlm ?? 'executor')
+  if (mode !== 'executor' && mode !== 'gateway') {
+    throw new Error(`operatorLlm must be executor|gateway (got ${mode})`)
+  }
+  merged.operatorLlm = mode
+  return {
+    executorId: merged.executorId,
+    executorPaired: merged.executorPaired,
+    operatorLlm: merged.operatorLlm,
+    gatewayUrl: merged.gatewayUrl ?? null,
+    gatewayApiKey: merged.gatewayApiKey ?? null,
+  }
 }

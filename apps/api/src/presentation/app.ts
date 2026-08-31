@@ -7,6 +7,23 @@ import type { Kernel } from '../application/kernel.js'
 
 const SESSION_COOKIE = 'ak_session'
 
+function sessionCookieOpts(maxAge?: number) {
+  const opts: {
+    httpOnly: true
+    path: string
+    sameSite: 'Lax'
+    secure: boolean
+    maxAge?: number
+  } = {
+    httpOnly: true,
+    path: '/',
+    sameSite: 'Lax',
+    secure: process.env.COOKIE_SECURE === '1',
+  }
+  if (maxAge !== undefined) opts.maxAge = maxAge
+  return opts
+}
+
 function sessionToken(c: Context): string | undefined {
   return (
     getCookie(c, SESSION_COOKIE) ??
@@ -78,11 +95,7 @@ export function createApp(kernel: Kernel): Hono {
       password: body.password,
       bootstrap: true,
     })
-    setCookie(c, SESSION_COOKIE, result.token, {
-      httpOnly: true,
-      path: '/',
-      sameSite: 'Lax',
-    })
+    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts())
     return c.json(result, 201)
   })
 
@@ -117,17 +130,12 @@ export function createApp(kernel: Kernel): Hono {
     } else {
       return c.json({ error: `unknown login mode: ${mode} (use password or github)` }, 400)
     }
-    setCookie(c, SESSION_COOKIE, result.token, {
-      httpOnly: true,
-      path: '/',
-      sameSite: 'Lax',
-      secure: process.env.COOKIE_SECURE === '1',
-    })
+    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts())
     return c.json(result)
   })
 
   app.post('/api/auth/logout', (c) => {
-    setCookie(c, SESSION_COOKIE, '', { httpOnly: true, path: '/', maxAge: 0 })
+    setCookie(c, SESSION_COOKIE, '', sessionCookieOpts(0))
     return c.json({ ok: true })
   })
 
@@ -141,14 +149,12 @@ export function createApp(kernel: Kernel): Hono {
     const state = c.req.query('state')
     if (!code || !state) return c.json({ error: 'missing code/state' }, 400)
     const result = await kernel.loginGithubOAuthCode(code, state)
-    setCookie(c, SESSION_COOKIE, result.token, {
-      httpOnly: true,
-      path: '/',
-      sameSite: 'Lax',
-      secure: process.env.COOKIE_SECURE === '1',
-    })
+    setCookie(c, SESSION_COOKIE, result.token, sessionCookieOpts())
+    // Cookie must be set on the WEB host (nginx → api). Callback URL must be
+    // https://<WEB_HOST>/api/auth/github/callback — not the bare API host.
     const web = process.env.WEB_ORIGIN ?? 'http://127.0.0.1:5173'
-    return c.redirect(`${web}/?github=1`, 302)
+    const dest = result.setupRequired ? '/setup' : '/overview'
+    return c.redirect(`${web}${dest}`, 302)
   })
 
   app.get('/api/auth/me', (c) => {
@@ -168,12 +174,13 @@ export function createApp(kernel: Kernel): Hono {
   app.get('/api/me/executor', (c) => {
     const owner = requireApiAuth(kernel, c)
     const s = kernel.getUserExecutorSettings(owner)
-    const { dshBasicAuthPassword, gatewayApiKey, ...safe } = s
+    const { gatewayApiKey, ...safe } = s
     return c.json({
       ...safe,
-      dshBasicAuthPassword: dshBasicAuthPassword ? '***' : null,
       gatewayApiKey: gatewayApiKey ? '***' : null,
       setupGaps: kernel.setupGapsForUser(owner),
+      heartbeat: kernel.executorHeartbeat(owner),
+      wssConnected: kernel.executorConnectGuide(owner).wssConnected,
     })
   })
 
@@ -182,14 +189,57 @@ export function createApp(kernel: Kernel): Hono {
     return c.json(kernel.executorConnectGuide(owner))
   })
 
+  app.post('/api/me/pair/start', (c) => {
+    const owner = authed(kernel, c)
+    return c.json(kernel.startDevicePair(owner), 201)
+  })
+
+  app.get('/api/me/pair/status', (c) => {
+    const owner = authed(kernel, c)
+    const code = c.req.query('code') ?? undefined
+    return c.json(kernel.devicePairStatus(owner, code))
+  })
+
+  /** Unauthenticated claim — DSH host proxies this; code is the secret. */
+  app.post('/api/pair/claim', async (c) => {
+    const body = (await c.req.json()) as { code?: string }
+    if (!body.code || typeof body.code !== 'string') {
+      return c.json({ error: 'code required' }, 400)
+    }
+    return c.json(kernel.claimDevicePair(body.code))
+  })
+
+  /** Optional REST complete — prefer WSS job.completed. Kept for debugging only if needed. */
+  app.post('/api/executor/jobs/:id/complete', async (c) => {
+    const owner = requireApiAuth(kernel, c)
+    const body = (await c.req.json()) as {
+      ok?: boolean
+      result?: Record<string, unknown>
+      error?: string
+    }
+    if (typeof body.ok !== 'boolean') {
+      return c.json({ error: 'ok boolean required' }, 400)
+    }
+    return c.json(
+      kernel.completeExecutorJob(owner, c.req.param('id'), {
+        ok: body.ok,
+        result: body.result,
+        error: body.error,
+      }),
+    )
+  })
+
   app.put('/api/me/executor', async (c) => {
     const owner = authed(kernel, c)
     const body = (await c.req.json()) as Record<string, unknown>
     const cur = kernel.getUserExecutorSettings(owner)
-    if (body.dshBasicAuthPassword === '***') body.dshBasicAuthPassword = cur.dshBasicAuthPassword
     if (body.gatewayApiKey === '***') body.gatewayApiKey = cur.gatewayApiKey
     const saved = kernel.putUserExecutorSettings(owner, body as never)
-    return c.json(saved)
+    const { gatewayApiKey, ...safe } = saved
+    return c.json({
+      ...safe,
+      gatewayApiKey: gatewayApiKey ? '***' : null,
+    })
   })
 
   app.get('/api/settings', (c) => {
@@ -270,8 +320,8 @@ export function createApp(kernel: Kernel): Hono {
 
   app.post('/api/settings/test-dsh', async (c) => {
     const owner = requireApiAuth(kernel, c)
-    await kernel.pingDsh(owner)
-    return c.json({ ok: true })
+    const result = await kernel.pingDsh(owner)
+    return c.json({ ok: true, ...result })
   })
 
   app.get('/api/projects', (c) => {

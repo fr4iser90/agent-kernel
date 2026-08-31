@@ -112,7 +112,44 @@ export function openSqlite(dbPath: string): Database.Database {
       doc_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS device_pairs (
+      code TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      claimed_at TEXT,
+      session_token TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_device_pairs_owner ON device_pairs(owner_id);
+
+    CREATE TABLE IF NOT EXISTS executor_jobs (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      result_json TEXT,
+      error_text TEXT,
+      created_at TEXT NOT NULL,
+      claimed_at TEXT,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_executor_jobs_owner_status
+      ON executor_jobs(owner_id, status, created_at);
+
+    CREATE TABLE IF NOT EXISTS executor_heartbeats (
+      owner_id TEXT PRIMARY KEY,
+      last_seen_at TEXT NOT NULL,
+      device_label TEXT
+    );
   `)
+
+  const runCols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
+  if (!runCols.some((c) => c.name === 'transcript_json')) {
+    db.exec(`ALTER TABLE runs ADD COLUMN transcript_json TEXT`)
+  }
 
   // migrate older projects table without meta_json
   const cols = db.prepare(`PRAGMA table_info(projects)`).all() as { name: string }[]

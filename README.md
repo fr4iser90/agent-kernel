@@ -10,7 +10,7 @@
 
 Showcase loop: [autonomous-lab](https://github.com/fr4iser90/autonomous-lab).  
 Executor: [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).  
-Models: [LocalAI-GateWay](https://github.com/fr4iser90/LocalAI-GateWay).
+MCP (VS Code / DSH): [agent-kernel-mcp](https://github.com/fr4iser90/agent-kernel-mcp).
 
 ## Status
 

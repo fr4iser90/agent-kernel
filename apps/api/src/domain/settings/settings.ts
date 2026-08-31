@@ -148,25 +148,13 @@ export function settingsSetupGaps(s: AgentKernelSettings): string[] {
   return gaps
 }
 
-/** Gaps for this user's BYO executor only — no global fallback. */
+/** Gaps for this user's BYO executor — pair DSH (outbound); no Host-HTTP dial. */
 export function userExecutorSetupGaps(s: {
   executorId: string
-  dshInvokeMode: string
-  dshEndpoint: string | null
-  dshTrustedHost: string | null
-  dshCliRoot: string | null
-  dshHome: string | null
+  executorPaired: boolean
 }): string[] {
   const gaps: string[] = []
   if (!s.executorId) gaps.push('executorId')
-  if (s.dshInvokeMode === 'host_http') {
-    if (!s.dshEndpoint) gaps.push('dshEndpoint')
-    if (!s.dshTrustedHost) gaps.push('dshTrustedHost')
-  } else if (s.dshInvokeMode === 'cli') {
-    if (!s.dshCliRoot) gaps.push('dshCliRoot')
-    if (!s.dshHome) gaps.push('dshHome')
-  } else {
-    gaps.push('dshInvokeMode')
-  }
+  if (!s.executorPaired) gaps.push('executorPaired')
   return gaps
 }

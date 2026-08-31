@@ -112,7 +112,7 @@ function Shell({ children, variant = 'app' }: { children: ReactNode; variant?: '
           {link({ to: '/agents', label: 'Agents' })}
           {link({ to: '/runs', label: 'Runs' })}
           {link({ to: '/chat', label: 'Chat' })}
-          {link({ to: '/setup', label: 'Executor' })}
+          {link({ to: '/setup', label: 'Setup' })}
           {me?.role === 'admin' && link({ to: '/admin', label: 'Admin' })}
           {me?.role === 'admin' && link({ to: '/settings', label: 'Settings' })}
         </nav>
@@ -122,6 +122,7 @@ function Shell({ children, variant = 'app' }: { children: ReactNode; variant?: '
               <div className="rail-user">
                 {me.username || me.githubLogin || 'user'}
                 {me.role ? ` · ${me.role}` : ''}
+                {(me.setupGaps?.length ?? 0) > 0 ? ' · setup needed' : ''}
               </div>
               <button type="button" className="ghost" onClick={() => void logout()}>
                 Log out
@@ -382,118 +383,190 @@ function LoginPage() {
 }
 
 function SetupWizard() {
-  type ConnectMode = 'public_url' | 'ssh_reverse' | 'vpn' | 'same_host'
+  type ExecutorChoice = {
+    id: string
+    title: string
+    blurb: string
+    ready: boolean
+  }
+
+  const EXECUTORS: ExecutorChoice[] = [
+    {
+      id: 'dsh',
+      title: 'DeepSeek Harness',
+      blurb: 'Ready — pair over HTTPS, control via outbound WSS. MCP tools optional.',
+      ready: true,
+    },
+    { id: 'opencode', title: 'OpenCode', blurb: 'Placeholder — not wired yet.', ready: false },
+    { id: 'aider', title: 'Aider', blurb: 'Placeholder — not wired yet.', ready: false },
+    { id: 'claude-code', title: 'Claude Code', blurb: 'Placeholder — not wired yet.', ready: false },
+    { id: 'codex', title: 'Codex', blurb: 'Placeholder — not wired yet.', ready: false },
+    { id: 'cursor-agent', title: 'Cursor Agent', blurb: 'Placeholder — not wired yet.', ready: false },
+    { id: 'goose', title: 'Goose', blurb: 'Placeholder — not wired yet.', ready: false },
+    { id: 'pi', title: 'Pi', blurb: 'Placeholder — not wired yet.', ready: false },
+  ]
+
   const nav = useNavigate()
-  const [guide, setGuide] = useState<Awaited<ReturnType<typeof api.connectGuide>> | null>(null)
-  const [form, setForm] = useState({
-    connectMode: 'same_host' as ConnectMode,
-    dshInvokeMode: 'host_http' as 'host_http' | 'cli',
-    dshEndpoint: 'http://127.0.0.1:13080',
-    dshTrustedHost: '127.0.0.1:13080',
-    dshLocalPort: 13080,
-    sshTunnelTarget: '',
-    dshBasicAuthUser: '',
-    dshBasicAuthPassword: '',
-    dshCliRoot: '',
-    dshHome: '',
-    gatewayUrl: '',
-    gatewayApiKey: '',
-  })
+  const { me, refresh } = useMe()
+  const incomplete = (me?.setupGaps.length ?? 0) > 0
+  const [executorId, setExecutorId] = useState('dsh')
+  const [gatewayUrl, setGatewayUrl] = useState('')
+  const [gatewayApiKey, setGatewayApiKey] = useState('')
+  const [operatorLlm, setOperatorLlm] = useState<'executor' | 'gateway'>('executor')
   const [err, setErr] = useState<string | null>(null)
-  const [step, setStep] = useState(1)
+  const [ok, setOk] = useState<string | null>(null)
+  const [step, setStep] = useState(0)
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [mcpAck, setMcpAck] = useState(false)
+  const [pairCode, setPairCode] = useState<string | null>(null)
+  const [pairExpiresAt, setPairExpiresAt] = useState<string | null>(null)
+  const [pairStatus, setPairStatus] = useState<'idle' | 'pending' | 'claimed' | 'expired'>('idle')
+  const [pairBusy, setPairBusy] = useState(false)
+  const [wssConnected, setWssConnected] = useState(false)
+  const [guideNotes, setGuideNotes] = useState<string[]>([])
 
   useEffect(() => {
     void (async () => {
       try {
-        const [g, ex] = await Promise.all([api.connectGuide(), api.getMyExecutor()])
-        setGuide(g)
-        setForm((f) => ({
-          ...f,
-          connectMode: (String(ex.connectMode || g.connectMode) as ConnectMode) || f.connectMode,
-          dshInvokeMode: (ex.dshInvokeMode as 'host_http' | 'cli') || f.dshInvokeMode,
-          dshEndpoint: String(ex.dshEndpoint ?? f.dshEndpoint ?? ''),
-          dshTrustedHost: String(ex.dshTrustedHost ?? f.dshTrustedHost ?? ''),
-          dshLocalPort: Number(ex.dshLocalPort ?? g.ssh.localPort ?? 13080),
-          sshTunnelTarget: String(ex.sshTunnelTarget ?? g.ssh.sshTarget ?? ''),
-          dshBasicAuthUser: String(ex.dshBasicAuthUser ?? ''),
-          dshCliRoot: String(ex.dshCliRoot ?? ''),
-          dshHome: String(ex.dshHome ?? ''),
-          gatewayUrl: String(ex.gatewayUrl ?? ''),
-          gatewayApiKey: ex.gatewayApiKey === '***' ? '***' : String(ex.gatewayApiKey ?? ''),
-        }))
+        const [ex, guide] = await Promise.all([api.getMyExecutor(), api.connectGuide()])
+        setWssConnected(Boolean(guide.wssConnected || (ex as { wssConnected?: boolean }).wssConnected))
+        setGuideNotes(guide.notes ?? [])
+        if (ex.gatewayUrl) setGatewayUrl(String(ex.gatewayUrl))
+        if (ex.gatewayApiKey === '***') setGatewayApiKey('***')
+        if (ex.operatorLlm === 'gateway' || ex.operatorLlm === 'executor') {
+          setOperatorLlm(ex.operatorLlm)
+        }
+        if (ex.executorPaired) {
+          setPairStatus('claimed')
+          setMcpAck(true)
+          if (!incomplete) setStep(1)
+        }
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e))
       } finally {
         setLoading(false)
       }
     })()
-  }, [])
+  }, [incomplete])
 
-  function applyMode(mode: ConnectMode) {
-    if (!guide) {
-      setForm({ ...form, connectMode: mode })
-      return
-    }
-    if (mode === 'ssh_reverse') {
-      setForm({
-        ...form,
-        connectMode: mode,
-        dshEndpoint: guide.ssh.endpoint,
-        dshTrustedHost: guide.ssh.trustedHost,
-        dshLocalPort: guide.ssh.localPort,
-      })
-    } else if (mode === 'vpn') {
-      setForm({
-        ...form,
-        connectMode: mode,
-        dshEndpoint: guide.vpn.endpointHint,
-        dshTrustedHost: guide.vpn.trustedHostHint,
-      })
-    } else if (mode === 'same_host') {
-      setForm({
-        ...form,
-        connectMode: mode,
-        dshEndpoint: `http://127.0.0.1:${form.dshLocalPort}`,
-        dshTrustedHost: `127.0.0.1:${form.dshLocalPort}`,
-      })
-    } else {
-      setForm({ ...form, connectMode: mode, dshEndpoint: '', dshTrustedHost: '' })
-    }
-  }
+  const mcpSnippet = `dsh plugin --profile web add github:fr4iser90/agent-kernel-mcp
+# or: dsh plugin --profile web add file:/absolute/path/to/agent-kernel-mcp
+dsh web
 
-  async function copySsh() {
-    const cmd =
-      form.sshTunnelTarget.trim() && guide
-        ? `ssh -N -R ${guide.ssh.remotePort}:127.0.0.1:${form.dshLocalPort} ${form.sshTunnelTarget.trim()}`
-        : guide?.ssh.command
-    if (!cmd) return
-    await navigator.clipboard.writeText(cmd)
+# Session Header → Agent Kernel → paste pairing code → Pair
+# DSH opens outbound WSS to this kernel (no Endpoint URL / Trusted Host).`
+
+  async function copyMcp() {
+    await navigator.clipboard.writeText(mcpSnippet)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
 
+  async function startPairing() {
+    setErr(null)
+    setPairBusy(true)
+    try {
+      const started = await api.startPair()
+      setPairCode(started.code)
+      setPairExpiresAt(started.expiresAt)
+      setPairStatus('pending')
+      setMcpAck(false)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPairBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (pairStatus !== 'pending' || !pairCode) return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const st = await api.pairStatus(pairCode)
+        if (cancelled) return
+        if (st.status === 'claimed') {
+          setPairStatus('claimed')
+          setMcpAck(true)
+          return
+        }
+        if (st.status === 'expired') setPairStatus('expired')
+      } catch {
+        /* keep polling */
+      }
+    }
+    void tick()
+    const id = setInterval(() => void tick(), 2000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [pairStatus, pairCode])
+
+  // Live WSS status — DSH may connect after pair; keep UI in sync.
+  useEffect(() => {
+    if (loading) return
+    if (step !== 1 && step !== 2) return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const guide = await api.connectGuide()
+        if (cancelled) return
+        setWssConnected(Boolean(guide.wssConnected))
+        if (guide.notes?.length) setGuideNotes(guide.notes)
+      } catch {
+        /* ignore */
+      }
+    }
+    void tick()
+    const id = setInterval(() => void tick(), 2000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [loading, step])
+
+  function continueFromPair() {
+    if (pairStatus !== 'claimed' && !mcpAck) {
+      setErr('Pair DeepSeek Harness with the code, or confirm already paired, then continue.')
+      return
+    }
+    setErr(null)
+    setStep(2)
+  }
+
   async function saveAndTest() {
     setErr(null)
+    setOk(null)
+    if (executorId !== 'dsh') {
+      setErr('Only DeepSeek Harness is implemented today. Pick DSH to continue.')
+      return
+    }
+    if (pairStatus !== 'claimed' && !mcpAck) {
+      setErr('Pair your DSH first.')
+      return
+    }
     setBusy(true)
     try {
-      await api.putMyExecutor({
-        connectMode: form.connectMode,
-        dshInvokeMode: form.dshInvokeMode,
-        dshEndpoint: form.dshInvokeMode === 'host_http' ? form.dshEndpoint : null,
-        dshTrustedHost: form.dshInvokeMode === 'host_http' ? form.dshTrustedHost : null,
-        dshLocalPort: form.dshLocalPort,
-        sshTunnelTarget: form.sshTunnelTarget.trim() || null,
-        dshBasicAuthUser: form.dshBasicAuthUser || null,
-        dshBasicAuthPassword: form.dshBasicAuthPassword || null,
-        dshCliRoot: form.dshInvokeMode === 'cli' ? form.dshCliRoot || null : null,
-        dshHome: form.dshInvokeMode === 'cli' ? form.dshHome || null : null,
-        gatewayUrl: form.gatewayUrl || null,
-        gatewayApiKey: form.gatewayApiKey || null,
-      })
-      await api.testDsh()
+      const patch: Record<string, unknown> = {
+        executorId: 'dsh',
+        operatorLlm,
+      }
+      if (operatorLlm === 'gateway') {
+        patch.gatewayUrl = gatewayUrl.trim() || null
+        if (gatewayApiKey !== '***') patch.gatewayApiKey = gatewayApiKey.trim() || null
+      } else {
+        patch.gatewayUrl = gatewayUrl.trim() || null
+        if (gatewayApiKey && gatewayApiKey !== '***') {
+          patch.gatewayApiKey = gatewayApiKey.trim()
+        }
+      }
+      await api.putMyExecutor(patch)
+      const test = await api.testDsh()
+      setOk(`WSS · ${JSON.stringify(test).slice(0, 140)}`)
+      await refresh()
       nav('/overview')
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -502,246 +575,232 @@ function SetupWizard() {
     }
   }
 
-  const modeNotes =
-    form.connectMode === 'ssh_reverse'
-      ? guide?.ssh.notes
-      : form.connectMode === 'vpn'
-        ? guide?.vpn.notes
-        : form.connectMode === 'same_host'
-          ? guide?.sameHost.notes
-          : guide?.publicUrl.notes
-
-  const modes =
-    guide?.modes ??
-    ([
-      { id: 'same_host', title: 'Same machine', summary: 'DSH on this host (127.0.0.1).' },
-      { id: 'ssh_reverse', title: 'SSH reverse', summary: 'Tunnel from your PC into this kernel.' },
-      { id: 'vpn', title: 'VPN', summary: 'Reach DSH over Tailscale / private net.' },
-      { id: 'public_url', title: 'Public URL', summary: 'HTTPS endpoint + optional basic auth.' },
-    ] as const)
+  const stepMeta = [
+    { id: 0, label: 'Executor' },
+    { id: 1, label: 'Pair' },
+    { id: 2, label: 'Finish' },
+  ]
 
   return (
-    <Shell>
-      <PageHead
-        title="My Executor"
-        lead="BYO DeepSeek Harness. The kernel only dials the endpoint you configure here."
-      />
-      <div className="steps" role="tablist">
-        <button
-          type="button"
-          className={step === 1 ? 'on' : ''}
-          onClick={() => setStep(1)}
-          role="tab"
-          aria-selected={step === 1}
-        >
-          1 · Connect
-        </button>
-        <span aria-hidden>·</span>
-        <button
-          type="button"
-          className={step === 2 ? 'on' : ''}
-          onClick={() => setStep(2)}
-          role="tab"
-          aria-selected={step === 2}
-        >
-          2 · GateWay
-        </button>
-      </div>
-      {form.dshEndpoint || form.dshCliRoot ? (
-        <div className="status-strip">
-          <strong>Current</strong>
-          <span className="stat-mono">
-            {form.dshInvokeMode === 'cli'
-              ? `cli · ${form.dshCliRoot || '—'}`
-              : `${form.connectMode} · ${form.dshEndpoint || '—'}`}
-          </span>
-        </div>
-      ) : null}
-      <Flash err={err} />
-      {loading ? (
-        <p className="loading">Loading executor…</p>
-      ) : (
-        <>
-          {step === 1 && (
-            <div className="card">
-              <h2>How the kernel reaches your DSH</h2>
-              <div className="mode-grid">
-                {modes.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className={`mode-card${form.connectMode === m.id ? ' on' : ''}`}
-                    onClick={() => applyMode(m.id as ConnectMode)}
-                  >
-                    <strong>{m.title}</strong>
-                    <span>{m.summary}</span>
-                  </button>
-                ))}
-              </div>
-              {modeNotes?.map((n) => (
-                <p key={n} className="muted note-line">
-                  {n}
-                </p>
-              ))}
+    <div className="wizard-screen">
+      <aside className="wizard-rail">
+        <Link to="/" className="brand">
+          agent<span>-</span>kernel
+        </Link>
+        <p className="eyebrow">{incomplete ? 'First-run setup' : 'Executor setup'}</p>
+        <h1>Connect your coding executor</h1>
+        <p>
+          This site is the control plane. Coding runs on <em>your</em> DSH (Win/Mac/Linux). You pair
+          once; DSH opens outbound WSS. The kernel never dials your PC — no Endpoint URL, no VPN.
+        </p>
+        <ol className="wizard-progress">
+          {stepMeta.map((s) => (
+            <li key={s.id} className={step === s.id ? 'on' : step > s.id ? 'done' : ''}>
+              <button type="button" onClick={() => setStep(s.id)} disabled={loading}>
+                <span>{s.id + 1}</span>
+                {s.label}
+              </button>
+            </li>
+          ))}
+        </ol>
+        {!incomplete && (
+          <button type="button" className="ghost wizard-skip" onClick={() => nav('/overview')}>
+            Back to workspace
+          </button>
+        )}
+      </aside>
 
-              {form.connectMode === 'ssh_reverse' && guide && (
-                <div className="tunnel-box">
-                  <label>
-                    SSH target (you set this)
-                    <input
-                      value={form.sshTunnelTarget}
-                      onChange={(e) => setForm({ ...form, sshTunnelTarget: e.target.value })}
-                      placeholder="user@kernel-host"
-                    />
-                  </label>
-                  <label>
-                    Run on your PC
-                    <textarea
-                      readOnly
-                      rows={2}
-                      value={
-                        form.sshTunnelTarget.trim()
-                          ? `ssh -N -R ${guide.ssh.remotePort}:127.0.0.1:${form.dshLocalPort} ${form.sshTunnelTarget.trim()}`
-                          : guide.ssh.command
-                      }
-                    />
-                  </label>
-                  <button type="button" className="ghost" onClick={() => void copySsh()}>
-                    {copied ? 'Copied' : 'Copy SSH command'}
+      <main className="wizard-main">
+        <Flash err={err} ok={ok} />
+        {loading ? (
+          <p className="loading">Loading setup…</p>
+        ) : (
+          <div className="wizard-panel">
+            {step === 0 && (
+              <>
+                <h2>Which executor?</h2>
+                <p className="sub">Only DeepSeek Harness is wired today.</p>
+                <div className="mode-grid">
+                  {EXECUTORS.map((ex) => (
+                    <button
+                      key={ex.id}
+                      type="button"
+                      className={`mode-card${executorId === ex.id ? ' on' : ''}${ex.ready ? '' : ' dim'}`}
+                      disabled={!ex.ready}
+                      onClick={() => setExecutorId(ex.id)}
+                      aria-pressed={executorId === ex.id}
+                    >
+                      <strong>
+                        {ex.title}
+                        <span className="pick-mark">{executorId === ex.id ? 'selected' : ''}</span>
+                      </strong>
+                      <span>{ex.blurb}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="row">
+                  <button type="button" onClick={() => setStep(1)} disabled={executorId !== 'dsh'}>
+                    Continue
                   </button>
                 </div>
-              )}
+              </>
+            )}
 
-              <h2 className="card-sub">Invoke</h2>
-              <div className="mode-grid invoke-grid">
-                <button
-                  type="button"
-                  className={`mode-card${form.dshInvokeMode === 'host_http' ? ' on' : ''}`}
-                  onClick={() => setForm({ ...form, dshInvokeMode: 'host_http' })}
-                >
-                  <strong>HTTP host</strong>
-                  <span>Call DSH over the endpoint below (usual BYO path).</span>
-                </button>
-                <button
-                  type="button"
-                  className={`mode-card${form.dshInvokeMode === 'cli' ? ' on' : ''}`}
-                  onClick={() => setForm({ ...form, dshInvokeMode: 'cli' })}
-                >
-                  <strong>Local CLI</strong>
-                  <span>Same machine only — spawn DSH CLI from a root path.</span>
-                </button>
-              </div>
+            {step === 1 && (
+              <>
+                <h2>Pair DeepSeek Harness</h2>
+                <p className="sub">
+                  Install the plugin, generate a code, claim it in the DSH Session Header. That
+                  enables outbound WSS (jobs) + MCP tools.
+                </p>
+                <div className="tunnel-box">
+                  <div className="status-strip">
+                    <strong>Pair</strong>
+                    <span className="stat-mono">
+                      {pairStatus === 'claimed' || mcpAck
+                        ? 'Paired'
+                        : pairStatus === 'pending'
+                          ? 'Waiting for DSH…'
+                          : pairStatus === 'expired'
+                            ? 'Code expired'
+                            : 'Not paired'}
+                    </span>
+                  </div>
+                  <div className="status-strip">
+                    <strong>WSS</strong>
+                    <span className="stat-mono">{wssConnected ? 'Connected' : 'Offline — start DSH'}</span>
+                  </div>
+                  <p className="muted">
+                    1. <code>dsh plugin --profile web add github:fr4iser90/agent-kernel-mcp</code> then{' '}
+                    <code>dsh web</code>
+                  </p>
+                  <p className="muted">
+                    2. Session Header → <strong>Agent Kernel</strong> → enter code → Pair
+                  </p>
+                  <div className="row" style={{ alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                    <button type="button" disabled={pairBusy} onClick={() => void startPairing()}>
+                      {pairBusy ? '…' : pairCode ? 'New code' : 'Generate pairing code'}
+                    </button>
+                    {pairCode ? (
+                      <code
+                        className="stat-mono"
+                        style={{ fontSize: '1.75rem', letterSpacing: '0.12em', fontWeight: 700 }}
+                      >
+                        {pairCode}
+                      </code>
+                    ) : null}
+                  </div>
+                  {pairExpiresAt && pairStatus === 'pending' ? (
+                    <p className="muted note-line">
+                      Expires {new Date(pairExpiresAt).toLocaleTimeString()}
+                    </p>
+                  ) : null}
+                  <details className="note-line">
+                    <summary className="muted">Install snippet / skip wait</summary>
+                    <label>
+                      Commands
+                      <textarea readOnly rows={8} value={mcpSnippet} />
+                    </label>
+                    <button type="button" className="primary-inline" onClick={() => void copyMcp()}>
+                      {copied ? 'Copied' : 'Copy'}
+                    </button>
+                    <label className="check-line">
+                      <input
+                        type="checkbox"
+                        checked={mcpAck}
+                        onChange={(e) => setMcpAck(e.target.checked)}
+                      />
+                      Already paired / use existing connect.json
+                    </label>
+                  </details>
+                  {guideNotes.length > 0 ? (
+                    <ul className="muted">
+                      {guideNotes.map((n) => (
+                        <li key={n}>{n}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+                <div className="row">
+                  <button type="button" className="ghost" onClick={() => setStep(0)}>
+                    Back
+                  </button>
+                  <button type="button" onClick={() => continueFromPair()}>
+                    Continue
+                  </button>
+                </div>
+              </>
+            )}
 
-              {form.dshInvokeMode === 'host_http' ? (
-                <>
-                  <label>
-                    DSH endpoint
+            {step === 2 && (
+              <>
+                <h2>Finish</h2>
+                <p className="sub">
+                  Chat runs on your DSH; GateWay only if you want chat without a coding runtime.
+                </p>
+                <div className="status-strip">
+                  <strong>WSS</strong>
+                  <span className="stat-mono">
+                    {wssConnected ? 'Connected — ready' : 'Offline — keep DSH running'}
+                  </span>
+                </div>
+                <fieldset className="wizard-fields">
+                  <legend className="muted">Operator chat LLM</legend>
+                  <label className="row-check">
                     <input
-                      value={form.dshEndpoint}
-                      onChange={(e) => setForm({ ...form, dshEndpoint: e.target.value })}
+                      type="radio"
+                      name="operatorLlm"
+                      checked={operatorLlm === 'executor'}
+                      onChange={() => setOperatorLlm('executor')}
                     />
+                    Executor (DSH) — default after pair; needs DSH agent preset <code>operator</code>
                   </label>
-                  <label>
-                    Trusted Host (= DSH TRUSTED_HOST)
+                  <label className="row-check">
                     <input
-                      value={form.dshTrustedHost}
-                      onChange={(e) => setForm({ ...form, dshTrustedHost: e.target.value })}
+                      type="radio"
+                      name="operatorLlm"
+                      checked={operatorLlm === 'gateway'}
+                      onChange={() => setOperatorLlm('gateway')}
                     />
+                    GateWay — OpenAI-compatible URL + key (no coding runtime required for chat)
                   </label>
-                  <label>
-                    Local DSH port
-                    <input
-                      type="number"
-                      value={form.dshLocalPort}
-                      onChange={(e) =>
-                        setForm({ ...form, dshLocalPort: Number(e.target.value) || 13080 })
-                      }
-                    />
-                  </label>
-                  {form.connectMode === 'public_url' && (
-                    <>
-                      <label>
-                        Basic auth user
-                        <input
-                          value={form.dshBasicAuthUser}
-                          onChange={(e) => setForm({ ...form, dshBasicAuthUser: e.target.value })}
-                        />
-                      </label>
-                      <label>
-                        Basic auth password
-                        <input
-                          type="password"
-                          value={form.dshBasicAuthPassword}
-                          onChange={(e) =>
-                            setForm({ ...form, dshBasicAuthPassword: e.target.value })
-                          }
-                        />
-                      </label>
-                    </>
-                  )}
-                </>
-              ) : (
-                <>
-                  <label>
-                    DSH CLI root
-                    <input
-                      value={form.dshCliRoot}
-                      onChange={(e) => setForm({ ...form, dshCliRoot: e.target.value })}
-                      placeholder="/path/to/deepseek-harness"
-                    />
-                  </label>
-                  <label>
-                    DSH_HOME
-                    <input
-                      value={form.dshHome}
-                      onChange={(e) => setForm({ ...form, dshHome: e.target.value })}
-                      placeholder="~/.dsh"
-                    />
-                  </label>
-                </>
-              )}
-              <div className="row end">
-                <button type="button" onClick={() => setStep(2)}>
-                  Continue to GateWay
-                </button>
-              </div>
-            </div>
-          )}
-          {step === 2 && (
-            <div className="card">
-              <h2>GateWay (operator chat)</h2>
-              <p className="muted">
-                Optional. Without URL + API key, Chat stays unavailable; catalog and runs still work.
-              </p>
-              <label>
-                GateWay URL
-                <input
-                  value={form.gatewayUrl}
-                  onChange={(e) => setForm({ ...form, gatewayUrl: e.target.value })}
-                  placeholder="https://…/v1"
-                />
-              </label>
-              <label>
-                GateWay API key
-                <input
-                  type="password"
-                  value={form.gatewayApiKey}
-                  onChange={(e) => setForm({ ...form, gatewayApiKey: e.target.value })}
-                />
-              </label>
-              <div className="row">
-                <button type="button" className="ghost" onClick={() => setStep(1)}>
-                  Back
-                </button>
-                <button type="button" disabled={busy} onClick={() => void saveAndTest()}>
-                  {busy ? 'Testing…' : 'Test DSH + Finish'}
-                </button>
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </Shell>
+                </fieldset>
+                {operatorLlm === 'gateway' && (
+                  <div className="wizard-fields">
+                    <label>
+                      GateWay URL
+                      <input
+                        value={gatewayUrl}
+                        onChange={(e) => setGatewayUrl(e.target.value)}
+                        placeholder="https://…/v1"
+                        required
+                      />
+                    </label>
+                    <label>
+                      GateWay API key
+                      <input
+                        type="password"
+                        value={gatewayApiKey}
+                        onChange={(e) => setGatewayApiKey(e.target.value)}
+                        required={gatewayApiKey !== '***'}
+                      />
+                    </label>
+                  </div>
+                )}
+                <div className="row">
+                  <button type="button" className="ghost" onClick={() => setStep(1)}>
+                    Back
+                  </button>
+                  <button type="button" disabled={busy} onClick={() => void saveAndTest()}>
+                    {busy ? 'Testing…' : wssConnected ? 'Enter workspace' : 'Test WSS + enter'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
   )
 }
 
@@ -823,7 +882,6 @@ function Overview() {
   const [projectCount, setProjectCount] = useState(0)
   const [runCount, setRunCount] = useState(0)
   const [executor, setExecutor] = useState<string>('…')
-  const [connectMode, setConnectMode] = useState<string>('—')
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -839,10 +897,11 @@ function Overview() {
         setItems(att.items as typeof items)
         setProjectCount(projs.projects.length)
         setRunCount(runs.runs.length)
-        if (ex?.connectMode) setConnectMode(String(ex.connectMode))
-        if (ex?.dshEndpoint) setExecutor(String(ex.dshEndpoint))
-        else if (ex?.dshInvokeMode === 'cli') setExecutor(`cli · ${ex.dshCliRoot ?? '—'}`)
-        else setExecutor('not configured')
+        if (!ex) setExecutor('not configured')
+        else if (ex.executorPaired && (ex as { wssConnected?: boolean }).wssConnected)
+          setExecutor('dsh · paired · WSS connected')
+        else if (ex.executorPaired) setExecutor('dsh · paired · WSS offline')
+        else setExecutor('dsh · not paired')
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e))
       } finally {
@@ -877,9 +936,7 @@ function Overview() {
             </div>
             <div className="stat wide">
               <strong>Executor</strong>
-              <span className="stat-mono">
-                {connectMode} · {executor}
-              </span>
+              <span className="stat-mono">{executor}</span>
             </div>
           </div>
 
@@ -3191,15 +3248,15 @@ function ChatPage() {
     <Shell>
       <PageHead
         title="Operator chat"
-        lead="LLM tools against this control plane. Requires GateWay URL + API key on Executor step 2."
+        lead="Control-plane chat — DSH by default, or GateWay if you chose that in setup. Not a coding IDE."
       />
       <Flash err={err} />
       <div className="card chat-card">
         <h2>Transcript</h2>
         {!log.length ? (
           <div className="empty tight">
-            No messages yet.{' '}
-            <Link to="/setup">Configure GateWay</Link> if chat fails with missing credentials.
+            No messages yet. Chat runs via your paired DSH (preset <code>operator</code>) unless
+            you set GateWay in <Link to="/setup">setup</Link>.
           </div>
         ) : (
           <div className="chat-log">

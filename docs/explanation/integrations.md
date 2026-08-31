@@ -2,8 +2,7 @@
 
 ## DeepSeek Harness (executor)
 
-- Runs coding loops; already on server Traefik:
-  `https://fr4iser-deepseek.fr4iser.com/` (auth at edge).
+- Runs coding loops; typically behind your Traefik / HTTPS edge (auth at edge).
 - Control plane **does not embed** DSH source. It:
   - sets workdir to the product path,
   - starts/attaches sessions (**CLI or Host API** — DSH Web UI optional),
@@ -15,19 +14,23 @@
 **Local-first → Docker server, volumes, git workspaces:** see
 [`runtime-topology.md`](runtime-topology.md).
 
-## LocalAI-GateWay (models)
+## Optional OpenAI-compatible GateWay (models)
 
-- OpenAI-compatible front door + login + API keys (you already have this).
-- Control plane uses GateWay for:
-  - **operator chat** (LLM + tools over catalog / assignments / nudge),
-  - optional LLM-assisted init (stack guess),
-  - embeddings for Knowledge/codegraph (llama.cpp backends behind GateWay).
-- Product **coding** agents may use GateWay **through DSH** as today (separate
-  path from operator chat).
+- Not part of agent-kernel and not required. Any OpenAI-compatible HTTP front
+  door works when you set `operatorLlm=gateway` (URL + key on My Executor).
+- **Operator chat** is mode-explicit (`operatorLlm` on My Executor):
+  - **`executor`** (default after pair) — LLM runs on the user's DSH via
+    `operator_turn` (preset `operator`, MCP tools only). No GateWay required.
+  - **`gateway`** — control plane calls that OpenAI-compat endpoint with
+    operator tools (catalog / assignments / nudge). Use when you want chat
+    without a coding runtime.
+- Same optional endpoint can feed review proposals / embeddings later; coding
+  models stay on the executor path (DSH → whatever models that stack uses).
 - **Start policy** runs in the API so “start autonomous run” is authorized by
   control plane identity, not a raw DSH URL alone.
 
-See [`ui.md`](ui.md) § “Two different chats”.
+See [`ui.md`](ui.md) § “Two different chats” and
+[`runtime-topology.md`](runtime-topology.md) § Operator chat LLM.
 
 ## AgentLayer (tools / security)
 

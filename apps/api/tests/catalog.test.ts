@@ -29,9 +29,7 @@ async function authedApp() {
     method: 'PUT',
     headers: { 'content-type': 'application/json', 'x-ak-session': token },
     body: JSON.stringify({
-      dshInvokeMode: 'cli',
-      dshCliRoot: mkdtempSync(join(tmpdir(), 'cli-')),
-      dshHome: mkdtempSync(join(tmpdir(), 'home-')),
+      executorPaired: true,
     }),
   })
   return { app, token, ownerId, kernel }

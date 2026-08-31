@@ -14,7 +14,7 @@ reads docs.
 |-------|------------|-----|
 | **Human operator** | You — owns Settings, Login, Init confirm, ACCEPT/kill | Not the coding loop |
 | **Control plane** (agent-kernel) | Catalog, Settings, Assignments, Brief, nudge, Overview | Not the product’s coding agent |
-| **Operator LLM** (optional) | GateWay tools on **our** API — same as UI buttons | Not DSH coding chat |
+| **Operator LLM** | Control-plane chat: `operatorLlm=executor` (DSH preset + MCP tools) or `gateway` (OpenAI-compat) — same actions as UI buttons | Not product coding chat; not Lawpack roles |
 | **Coding agent** (executor) | DSH v1 / later Claude/Pi — edits **product** repos | Not agent-kernel dashboard logic |
 | **Lawpack** | Versioned law/role **content** | Not Settings, not the executor |
 | **GateWay** | Models | Not policy |

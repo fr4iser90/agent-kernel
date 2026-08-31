@@ -3,16 +3,14 @@ import { AiderExecutor } from '../aider/aider-executor.js'
 import { ClaudeCodeExecutor } from '../claude-code/claude-code-executor.js'
 import { CodexExecutor } from '../codex/codex-executor.js'
 import { CursorAgentExecutor } from '../cursor-agent/cursor-agent-executor.js'
-import { DshCliExecutor } from '../dsh/dsh-cli-executor.js'
-import { DshExecutor } from '../dsh/dsh-executor.js'
-import { DshHostClient } from '../dsh/dsh-host-client.js'
 import { GooseExecutor } from '../goose/goose-executor.js'
 import { OpenCodeExecutor } from '../opencode/opencode-executor.js'
 import { PiExecutor } from '../pi/pi-executor.js'
+import { executorNotImplemented } from './not-implemented.js'
 
 /**
  * Registered executorIds.
- * `dsh` = implemented; all others = loud placeholders until their adapter is built.
+ * `dsh` = outbound WSS job channel (paired DSH). No Host-HTTP dial.
  */
 export const EXECUTOR_IDS = [
   'dsh',
@@ -28,39 +26,30 @@ export type ExecutorId = (typeof EXECUTOR_IDS)[number]
 
 export type ExecutorFactorySettings = {
   executorId: string
-  dshInvokeMode: 'cli' | 'host_http'
-  dshEndpoint: string | null
-  dshTrustedHost: string | null
-  dshBasicAuthUser: string | null
-  dshBasicAuthPassword: string | null
-  dshCliRoot: string | null
-  dshHome: string | null
+}
+
+/** Loud stub — kernel must enqueue jobs, not call ExecutorPort for DSH. */
+class OutboundDshExecutor implements ExecutorPort {
+  readonly id = 'dsh'
+  start(): never {
+    return executorNotImplemented('dsh', 'start (outbound job queue)')
+  }
+  nudge(): never {
+    return executorNotImplemented('dsh', 'nudge (outbound job queue)')
+  }
+  getTranscript(): never {
+    return executorNotImplemented('dsh', 'getTranscript (outbound job queue)')
+  }
 }
 
 /**
  * Build ExecutorPort by executorId.
- * Registry only — vendor wire code stays in each adapter folder.
+ * DSH never dials Host HTTP from the kernel.
  */
 export function createExecutor(settings: ExecutorFactorySettings): ExecutorPort {
   switch (settings.executorId) {
     case 'dsh':
-      if (settings.dshInvokeMode === 'cli') {
-        return new DshCliExecutor({
-          cliRoot: settings.dshCliRoot!,
-          dshHome: settings.dshHome!,
-        })
-      }
-      if (settings.dshInvokeMode === 'host_http') {
-        return new DshExecutor(
-          new DshHostClient({
-            endpoint: settings.dshEndpoint!,
-            trustedHost: settings.dshTrustedHost!,
-            basicAuthUser: settings.dshBasicAuthUser,
-            basicAuthPassword: settings.dshBasicAuthPassword,
-          }),
-        )
-      }
-      throw new Error(`Unknown dshInvokeMode=${settings.dshInvokeMode}`)
+      return new OutboundDshExecutor()
     case 'pi':
       return new PiExecutor()
     case 'claude-code':

@@ -3,7 +3,7 @@ import { request as httpsRequest } from 'node:https'
 import { URL } from 'node:url'
 
 export type DshHostConfig = {
-  /** How the kernel reaches DSH (may be tunnel/VPN IP — different from Host header). */
+  /** How the kernel reaches DSH (may be VPN IP — different from Host header). */
   endpoint: string
   /** Host header value; must match DSH TRUSTED_HOST (e.g. localhost:13080). */
   trustedHost: string

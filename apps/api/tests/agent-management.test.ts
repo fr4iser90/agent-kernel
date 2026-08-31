@@ -51,12 +51,7 @@ function makeInitializedProject(
 }
 
 function fillExecutor(kernel: Kernel, ownerId: string) {
-  kernel.putUserExecutorSettings(ownerId, {
-    dshEndpoint: 'http://127.0.0.1:13080',
-    dshTrustedHost: '127.0.0.1:13080',
-    dshInvokeMode: 'host_http',
-    connectMode: 'same_host',
-  })
+  kernel.putUserExecutorSettings(ownerId, { executorId: 'dsh', executorPaired: true })
 }
 
 describe('agent management CRUD', () => {
@@ -176,12 +171,7 @@ describe('agent management CRUD', () => {
     fillExecutor(kernel, ownerId)
     const project = makeInitializedProject(kernel, projects, ownerId, 'rev')
     // Point at live docker DSH if present — otherwise expect loud connection error.
-    kernel.putUserExecutorSettings(ownerId, {
-      dshEndpoint: 'http://127.0.0.1:13080',
-      dshTrustedHost: 'localhost:13080',
-      dshInvokeMode: 'host_http',
-      connectMode: 'same_host',
-    })
+    kernel.putUserExecutorSettings(ownerId, { executorId: 'dsh', executorPaired: true })
     const a = kernel.createAssignment({
       ownerId,
       projectId: project.id,
